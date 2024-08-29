@@ -27,8 +27,8 @@ const userSchema = mongoose.Schema(
       postalCode: { type: String, required: true },
     },
     location: {
-      latitude: { type: Number, required: true },
-      longitude: { type: Number, required: true },
+      latitude: { type: Number, required: false },
+      longitude: { type: Number, required: false },
     },
   },
   {
