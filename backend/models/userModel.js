@@ -24,7 +24,7 @@ const userSchema = mongoose.Schema(
     deliveryAddress: {
       street: { type: String, required: false },
       city: { type: String, required: false },
-      postalCode: { type: String, required: true },
+      postalCode: { type: String, required: false },
     },
     location: {
       latitude: { type: Number, required: false },

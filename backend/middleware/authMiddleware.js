@@ -7,7 +7,7 @@ const protect = asyncHandler(async (req, res, next) => {
   let token;
 
   // Log only the necessary parts of the request
-  console.log('Cookies:', req.cookies); // Log cookies to check if 'jwt' is present
+  // console.log('Cookies:', req.cookies); 
 
   // Read JWT from the 'jwt' cookie
   token = req.cookies.jwt;
