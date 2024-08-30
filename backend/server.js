@@ -27,7 +27,7 @@ app.set('trust proxy', 1); // Trust first proxy
 
 app.use(
   cors({
-    origin: env === 'production' ? 'https://frontend-qm4h.onrender.com' : 'http://192.168.1.6:3000',  // Use appropriate URL based on environment
+    origin: 'https://frontend-qm4h.onrender.com',  // Use appropriate URL based on environment
     // origin:'http://192.168.1.6:3000',
     // methods: 'GET,POST,PUT,DELETE,OPTIONS',
     credentials: true,  // Allow cookies and credentials if needed
