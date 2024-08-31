@@ -29,6 +29,7 @@ app.use(
   cors({
     origin: 'https://frontend-qm4h.onrender.com',  // Use appropriate URL based on environment
     // origin:'http://192.168.1.6:3000',
+    // origin:'http://localhost:3000',
     // methods: 'GET,POST,PUT,DELETE,OPTIONS',
     credentials: true,  // Allow cookies and credentials if needed
   })

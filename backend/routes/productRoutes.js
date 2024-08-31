@@ -12,6 +12,7 @@ import {
   updateProductDetail,
   createProductDetail,
   createFinancialDetail,
+  getProductsByCategory,
   getCategories,
 } from '../controllers/productController.js';
 import { protect, admin } from '../middleware/authMiddleware.js';
@@ -19,6 +20,7 @@ import checkObjectId from '../middleware/checkObjectId.js';
 
 router.route('/').get(getProducts).post(protect, admin, createProduct);
 router.route('/categories').get(getCategories);
+router.get('/categories/:category/products', getProductsByCategory);
 router.route('/:id/reviews').post(protect, checkObjectId, createProductReview);
 router.get('/top', getTopProducts);
 router

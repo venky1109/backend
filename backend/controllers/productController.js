@@ -40,10 +40,10 @@ const getCategories = asyncHandler(async (req, res) => {
           category: { $regex: req.query.keyword, $options: 'i' }
         }
       : {};
-
+   
     // Get distinct categories based on the keyword filter
     const categories = await Product.distinct('category', keyword);
-
+    console.log(categories)
     if (categories.length === 0) {
       res.status(404).json({ message: 'No categories found' });
     } else {
@@ -51,6 +51,35 @@ const getCategories = asyncHandler(async (req, res) => {
     }
   } catch (error) {
     res.status(500).json({ message: 'Failed to fetch categories' });
+  }
+});
+
+
+// Controller to fetch products by category
+export const getProductsByCategory = asyncHandler(async (req, res) => {
+  try {
+    const category = req.params.category;
+    console.log("products req:", req.params); // Log parameters to see what's received
+
+    const pageSize = Number(process.env.PAGINATION_LIMIT) || 10; // Default page size if not set
+    const page = Number(req.query.pageNumber) || 1; // Default to page 1 if not specified
+
+    // Find products by category
+    const products = await Product.find({ category })
+      .limit(pageSize) // Limit number of products per page
+      .skip(pageSize * (page - 1)); // Skip products for previous pages
+
+    // Calculate total count of products for pagination
+    const count = await Product.countDocuments({ category });
+
+    if (products.length === 0) {
+      res.status(404).json({ message: `No products found in category: ${category}` });
+    } else {
+      res.json({ products, page, pages: Math.ceil(count / pageSize) });
+    }
+  } catch (error) {
+    console.error('Error fetching products:', error); // Log error for debugging
+    res.status(500).json({ message: 'Failed to fetch products' });
   }
 });
 
