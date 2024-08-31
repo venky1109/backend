@@ -43,7 +43,7 @@ const getCategories = asyncHandler(async (req, res) => {
    
     // Get distinct categories based on the keyword filter
     const categories = await Product.distinct('category', keyword);
-    console.log(categories)
+    // console.log(categories)
     if (categories.length === 0) {
       res.status(404).json({ message: 'No categories found' });
     } else {
@@ -59,7 +59,7 @@ const getCategories = asyncHandler(async (req, res) => {
 export const getProductsByCategory = asyncHandler(async (req, res) => {
   try {
     const category = req.params.category;
-    console.log("products req:", req.params); // Log parameters to see what's received
+    // console.log("products req:", req.params); // Log parameters to see what's received
 
     const pageSize = Number(process.env.PAGINATION_LIMIT) || 10; // Default page size if not set
     const page = Number(req.query.pageNumber) || 1; // Default to page 1 if not specified
