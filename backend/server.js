@@ -18,6 +18,11 @@ dotenv.config();
 connectDB();
 
 const app = express();
+const allowedOrigins = [
+  'https://manakiranaonline.onrender.com',
+  'https://manakirana.online',
+  'https://etrug.app'
+];
 
 // Set up the port
 const port = process.env.PORT || 5000;
@@ -28,11 +33,15 @@ app.set('trust proxy', 1); // Trust first proxy
 
 app.use(
   cors({
-    origin: 'https://manakiranaonline.onrender.com/',  // Use appropriate URL based on environment
-    // origin:'http://192.168.1.6:3000',
-    // origin:'http://localhost:3000',
-    // methods: 'GET,POST,PUT,DELETE,OPTIONS',
-    credentials: true,  // Allow cookies and credentials if needed
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: 'GET,POST,PUT,DELETE,OPTIONS',
+    credentials: true
   })
 );
 
