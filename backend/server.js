@@ -8,6 +8,7 @@ import productRoutes from './routes/productRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import orderRoutes from './routes/orderRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
+import promotionRoutes from './routes/promotionRoutes.js'; // Import promotion routes
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 
 // Load environment variables
@@ -27,9 +28,9 @@ app.set('trust proxy', 1); // Trust first proxy
 
 app.use(
   cors({
-    origin: 'https://frontend-qm4h.onrender.com',  // Use appropriate URL based on environment
+    // origin: 'https://frontend-qm4h.onrender.com',  // Use appropriate URL based on environment
     // origin:'http://192.168.1.6:3000',
-    // origin:'http://localhost:3000',
+    origin:'http://localhost:3000',
     // methods: 'GET,POST,PUT,DELETE,OPTIONS',
     credentials: true,  // Allow cookies and credentials if needed
   })
@@ -45,6 +46,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api/promotions', promotionRoutes);
 
 // PayPal configuration route
 app.get('/api/config/paypal', (req, res) =>
