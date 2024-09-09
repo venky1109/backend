@@ -21,7 +21,10 @@ const app = express();
 const allowedOrigins = [
   'https://manakiranaonline.onrender.com',
   'https://manakirana.online',
-  'https://etrug.app'
+  'https://etrug.app',
+  'http://192.168.1.6:3000',
+  'http://localhost:3000',
+  'https://www.etrug.app' // Added this origin
 ];
 
 // Set up the port
