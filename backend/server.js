@@ -24,6 +24,7 @@ const allowedOrigins = [
   'https://etrug.app',
   'http://192.168.1.6:3000',
   'http://localhost:3000',
+  'https://manakirana.com',
   'https://www.etrug.app' // Added this origin
 ];
 

@@ -209,6 +209,98 @@ const createFinancialDetail = asyncHandler(async (req, res) => {
   }
 });
 
+const getFinancialDetails = async (req, res) => {
+  const { productId, id: detailId, financialId } = req.params; // Destructure params
+
+  try {
+    // Find the product by productId
+    const product = await Product.findById(productId);
+
+    if (product) {
+      // Find the specific detail by detailId
+      const detail = product.details.id(detailId);
+
+      if (detail) {
+        // Find the specific financial detail by financialId
+        const financialDetail = detail.financials.id(financialId);
+
+        if (financialDetail) {
+          res.status(200).json(financialDetail); // Send the financial detail as a response
+        } else {
+          res.status(404).json({ message: 'Financial detail not found' });
+        }
+      } else {
+        res.status(404).json({ message: 'Product detail not found' });
+      }
+    } else {
+      res.status(404).json({ message: 'Product not found' });
+    }
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+const getBatchFinancialDetails = async (req, res) => {
+  try {
+    // Log the incoming request body for debugging
+    // console.log('Request body:', req.body);
+
+    // Expecting an array of items from the request body
+    const { items } = req.body;
+
+    // Validate that items exist and is an array
+    if (!items || !Array.isArray(items)) {
+      return res.status(400).json({ message: 'Invalid request, items array is required' });
+    }
+
+    // Fetch the financial details for the items in the batch
+    const financialDetails = await Promise.all(
+      items.map(async (item) => {
+        try {
+          // Fetch the product by ID
+          const product = await Product.findById(item.productId);
+          if (!product) {
+            return { error: `Product ${item.productId} not found` };
+          }
+
+          // Find the specific detail by detailId
+          const detail = product.details.id(item.detailId);
+          if (!detail) {
+            return { error: `Detail ${item.detailId} not found` };
+          }
+
+          // Find the specific financial record by financialId
+          const financial = detail.financials.id(item.financialId);
+          if (!financial) {
+            return { error: `Financial ${item.financialId} not found` };
+          }
+
+          // Return the financial details
+          return {
+            productId: item.productId,
+            detailId: item.detailId,
+            financialId: item.financialId,
+            price: financial.price,
+            dprice: financial.dprice,
+            discount:  financial.Discount, // Handle both possible naming conventions
+          };
+        } catch (err) {
+          // Handle any unexpected errors during the fetch process
+          return { error: `Error fetching data for productId: ${item.productId}`, details: err.message };
+        }
+      })
+    );
+
+    // Respond with the fetched financial details
+    res.json(financialDetails);
+  } catch (error) {
+    // General error handler for the entire operation
+    console.error('Server Error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+
 // @desc    Update a product
 // @route   PUT /api/products/:id
 // @access  Private/Admin
@@ -399,6 +491,8 @@ export {
   createProduct,
   createProductDetail,
   createFinancialDetail,
+  getFinancialDetails,
+  getBatchFinancialDetails,
   updateProduct,
   deleteProduct,
   deleteProductDetail,
