@@ -26,7 +26,7 @@ const protect = asyncHandler(async (req, res, next) => {
 
       next(); // Proceed to the next middleware or route handler
     } catch (error) {
-      console.error('JWT Verification Error:', error.message);
+      // console.error('JWT Verification Error:', error.message);
       res.status(401).json({ message: 'Not authorized, token failed' });
     }
   } else {
