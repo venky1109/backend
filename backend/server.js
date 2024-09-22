@@ -10,6 +10,8 @@ import orderRoutes from './routes/orderRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import promotionRoutes from './routes/promotionRoutes.js'; // Import promotion routes
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
+import { Server } from 'socket.io';
+import { createServer } from 'http';
 
 // Load environment variables
 dotenv.config();
@@ -18,6 +20,22 @@ dotenv.config();
 connectDB();
 
 const app = express();
+const server = createServer(app);  // Create HTTP server for both Express and Socket.IO
+const io = new Server(server, {
+  cors: {
+    origin: [
+      'https://manakiranaonline.onrender.com',
+      'https://manakirana.online',
+      'https://etrug.app',
+      'http://192.168.1.6:3000',
+      'http://localhost:3000',
+      'https://manakirana.com',
+      'https://www.etrug.app' // Added this origin
+    ],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true
+  }
+});
 const allowedOrigins = [
   'https://manakiranaonline.onrender.com',
   'https://manakirana.online',
@@ -31,10 +49,9 @@ const allowedOrigins = [
 // Set up the port
 const port = process.env.PORT || 5000;
 const env = process.env.NODE_ENV || 'development';  // Default to development if NODE_ENV is not set
-// app.set('trust proxy', 1);  // Add this line/
-// Enable CORS for all routes
-app.set('trust proxy', 1); // Trust first proxy
+app.set('trust proxy', 1);  // Trust first proxy
 
+// Enable CORS for all routes
 app.use(
   cors({
     origin: function (origin, callback) {
@@ -89,7 +106,42 @@ if (env === 'production') {
 app.use(notFound);
 app.use(errorHandler);
 
-// Start the server
-app.listen(port, () =>
+// MongoDB Change Streams to monitor product updates
+import Product from './models/productModel.js'; 
+
+// Start WebSocket connection
+io.on('connection', (socket) => {
+  console.log('Client connected');
+  
+  const productChangeStream = Product.watch();
+
+  productChangeStream.on('change', async (change) => {
+    // console.log('Change detected in Product collection:', change);
+
+    if (change.operationType === 'update') {
+      const updatedProductId = change.documentKey._id;
+
+      try {
+        // Fetch the updated product from the database
+        const updatedProduct = await Product.findById(updatedProductId);
+
+        if (updatedProduct) {
+          // Emit updated product details to all connected clients
+          io.emit('productUpdate', updatedProduct);  // Emit to all connected clients
+          // console.log('Emitting updated product:', updatedProduct);
+        }
+      } catch (error) {
+        console.error('Error fetching updated product:', error);
+      }
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected');
+  });
+});
+
+// Start the server using the "server.listen()" method
+server.listen(port, () => 
   console.log(`Server running in ${env} mode on port ${port}`)
 );

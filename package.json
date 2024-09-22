@@ -28,7 +28,8 @@
     "mongoose": "^7.0.1",
     "multer": "^1.4.5-lts.1",
     "react-phone-number-input": "^3.3.9",
-    "react-scripts": "^5.0.1"
+    "react-scripts": "^5.0.1",
+    "socket.io": "^4.8.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.17",
