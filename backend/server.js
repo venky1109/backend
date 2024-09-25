@@ -18,7 +18,7 @@ import Product from './models/productModel.js';  // Import product model
 // Load environment variables
 dotenv.config();
 
-// Connect to the database
+// Connect to the database (reused across WebSocket connections)
 connectDB();
 
 const app = express();
@@ -39,6 +39,16 @@ const io = new Server(server, {
   },
 });
 
+// Set up the port
+const port = process.env.PORT || 5000;
+const env = process.env.NODE_ENV || 'development'; // Default to development if NODE_ENV is not set
+app.set('trust proxy', 1); // Trust first proxy
+
+// Enable Helmet middleware to set security-related headers
+app.use(helmet());  
+app.use(helmet.frameguard({ action: 'SAMEORIGIN' }));
+
+// Enable CORS for all routes
 const allowedOrigins = [
   'https://manakiranaonline.onrender.com',
   'https://manakirana.online',
@@ -49,18 +59,6 @@ const allowedOrigins = [
   'https://www.etrug.app',
 ];
 
-// Set up the port
-const port = process.env.PORT || 5000;
-const env = process.env.NODE_ENV || 'development'; // Default to development if NODE_ENV is not set
-app.set('trust proxy', 1); // Trust first proxy
-
-// Enable Helmet middleware to set security-related headers, including X-Frame-Options
-app.use(helmet());  // Helmet automatically adds X-Frame-Options (DENY by default)
-
-// Or, if you specifically want to allow SAMEORIGIN instead of DENY:
-app.use(helmet.frameguard({ action: 'SAMEORIGIN' }));
-
-// Enable CORS for all routes
 app.use(
   cors({
     origin: function (origin, callback) {
@@ -96,16 +94,12 @@ app.get('/api/config/paypal', (req, res) =>
 const __dirname = path.resolve();
 
 if (env === 'production') {
-  // Serve static files from the /frontend/build directory in production mode
-  app.use('/uploads', express.static('/var/data/uploads')); // Ensure this path is correct on your server
+  app.use('/uploads', express.static('/var/data/uploads')); 
   app.use(express.static(path.join(__dirname, '/frontend/build')));
-
-  // All non-API routes should serve the frontend build index.html
   app.get('*', (req, res) =>
     res.sendFile(path.resolve(__dirname, 'frontend', 'build', 'index.html'))
   );
 } else {
-  // Serve static files from the /uploads directory in development mode
   app.use('/uploads', express.static(path.join(__dirname, '/uploads')));
   app.get('/', (req, res) => {
     res.send('API is running....');
@@ -120,11 +114,13 @@ const clients = {};  // Object to store cart items for connected clients
 
 // MongoDB Change Streams to monitor product updates
 io.on('connection', (socket) => {
-  // console.log(`Client connected: ${socket.id}`);
+  console.log(`Client connected: ${socket.id}`);
+
+  // Handle product updates in the MongoDB collection
+  let productChangeStream;  // Define outside to close later
 
   // Listen for the client sending their cart items
   socket.on('clientCart', async (cartItems) => {
-    // console.log('Received cart from client:', socket.id, cartItems);
     clients[socket.id] = cartItems;  // Store client's cart items on the server
 
     const updatesToSend = [];
@@ -158,39 +154,43 @@ io.on('connection', (socket) => {
 
     // If there are updates to send, emit them to the client
     if (updatesToSend.length > 0) {
-      // console.log('Sending product updates to client:', updatesToSend);
       updatesToSend.forEach((updatedProduct) => {
-        // socket.emit('productUpdate', updatedProduct);  // Send missed updates
+        socket.emit('productUpdate', updatedProduct);  // Send missed updates
+      });
+    }
+
+    // Initialize the change stream only once, when cart is sent
+    if (!productChangeStream) {
+      productChangeStream = Product.watch();
+
+      productChangeStream.on('change', async (change) => {
+        if (change.operationType === 'update') {
+          const updatedProductId = change.documentKey._id;
+
+          try {
+            const updatedProduct = await Product.findById(updatedProductId);
+
+            if (updatedProduct) {
+              io.emit('productUpdate', updatedProduct); // Emit to all connected clients
+            }
+          } catch (error) {
+            console.error('Error fetching updated product:', error.message);
+          }
+        }
       });
     }
   });
 
-  // Handle product updates in the MongoDB collection
-  const productChangeStream = Product.watch();
-
-  productChangeStream.on('change', async (change) => {
-    if (change.operationType === 'update') {
-      const updatedProductId = change.documentKey._id;
-
-      try {
-        // Fetch the updated product from the database
-        const updatedProduct = await Product.findById(updatedProductId);
-
-        if (updatedProduct) {
-          // Emit updated product details to all connected clients
-          io.emit('productUpdate', updatedProduct); // Emit to all connected clients
-          // console.log('Emitting updated product:', updatedProduct.name);
-        }
-      } catch (error) {
-        // console.error('Error fetching updated product:', error.message);
-      }
-    }
-  });
-
-  // Handle client disconnection
+  // Handle client disconnection and cleanup
   socket.on('disconnect', () => {
-    // console.log(`Client disconnected: ${socket.id}`);
+    console.log(`Client disconnected: ${socket.id}`);
     delete clients[socket.id];  // Remove client cart from tracking when they disconnect
+
+    // Clean up change stream
+    if (productChangeStream) {
+      productChangeStream.close();
+      productChangeStream = null;
+    }
   });
 });
 
