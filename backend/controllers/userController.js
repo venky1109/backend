@@ -7,9 +7,12 @@ import User from '../models/userModel.js';
 const authUser = asyncHandler(async (req, res) => {
   const { phoneNo, password } = req.body;
   const user = await User.findOne({ phoneNo });
+  // console.log('authUser function called');
 
   if (user && (await user.matchPassword(password))) {
-    generateToken(res, user._id);
+    // generateToken(res, user._id);
+    const token = generateToken(res,user._id);
+    // console.log('Generated Token:', token);
     res.json({
       _id: user._id,
       name: user.name,
@@ -17,6 +20,7 @@ const authUser = asyncHandler(async (req, res) => {
       isAdmin: user.isAdmin,
       deliveryAddress: user.deliveryAddress,
       location: user.location,
+      token, 
     });
   } else {
     res.status(401);

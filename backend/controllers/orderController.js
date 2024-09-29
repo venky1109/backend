@@ -7,70 +7,137 @@ import { verifyPayPalPayment, checkIfNewTransaction } from '../utils/paypal.js';
 // @desc    Create new order
 // @route   POST /api/orders
 // @access  Private
-const addOrderItems = asyncHandler(async (req, res) => {
-  const { orderItems, shippingAddress, paymentMethod,itemsPrice,shippingPrice,totalPrice } = req.body;
+// const addOrderItems = asyncHandler(async (req, res) => {
+//   const { orderItems, shippingAddress, paymentMethod,itemsPrice,shippingPrice,totalPrice } = req.body;
 
  
+
+//   if (orderItems && orderItems.length === 0) {
+//     res.status(400);
+//     throw new Error('No order items');
+//   } else {
+//     // NOTE: here we must assume that the prices from our client are incorrect.
+//     // We must only trust the price of the item as it exists in
+//     // our DB. This prevents a user paying whatever they want by hacking our client
+//     // side code - https://gist.github.com/bushblade/725780e6043eaf59415fbaf6ca7376ff
+
+//     // get the ordered items from our database
+//     const itemsFromDB = await Product.find({
+//       _id: { $in: orderItems.map((x) => x.productId) },
+//     });
+
+
+
+//     // map over the order items and use the price from our items from database
+//     const dbOrderItems = orderItems.map((itemFromClient) => {
+//       const matchingItemFromDB = itemsFromDB.find(
+//         (itemFromDB) =>( itemFromDB._id.toString() === itemFromClient.productId  )
+//       );
+
+//       const DBOrderDetails = matchingItemFromDB.details.find(
+//         (itemFromDB) =>( itemFromDB._id.toString() === itemFromClient.brandId  )
+//       );
+//       const DBFinanceDetails = DBOrderDetails.financials.find(
+//         (itemFromDB) =>( itemFromDB._id.toString() === itemFromClient.financialId  )
+//       );
+
+//       // console.log(matchingItemFromDB);
+//       // const price=DBFinanceDetails.dprice *  itemFromClient.qty
+//       return {
+//         ...itemFromClient,
+//         product: matchingItemFromDB,
+//         price: DBFinanceDetails.dprice,
+//         _id: undefined,
+//       };
+//     });
+   
+//     // calculate prices
+//     const { itemsPrice,  shippingPrice, totalPrice } =
+//       calcPrices(dbOrderItems);
+//       // console.log(dbOrderItems);
+//     const order = new Order({
+//       orderItems: dbOrderItems,
+//       user: req.user._id,
+//       shippingAddress,
+//       paymentMethod,
+//       itemsPrice,
+//       // taxPrice,
+//       shippingPrice,
+//       totalPrice,
+//     });
+     
+//     const createdOrder = await order.save();
+
+//     res.status(201).json(createdOrder);
+//   }
+// });
+
+const addOrderItems = asyncHandler(async (req, res) => {
+  const { orderItems, shippingAddress, paymentMethod } = req.body;
 
   if (orderItems && orderItems.length === 0) {
     res.status(400);
     throw new Error('No order items');
   } else {
-    // NOTE: here we must assume that the prices from our client are incorrect.
-    // We must only trust the price of the item as it exists in
-    // our DB. This prevents a user paying whatever they want by hacking our client
-    // side code - https://gist.github.com/bushblade/725780e6043eaf59415fbaf6ca7376ff
-
-    // get the ordered items from our database
+    // Get the ordered items from the database
     const itemsFromDB = await Product.find({
       _id: { $in: orderItems.map((x) => x.productId) },
     });
 
-
-
-    // map over the order items and use the price from our items from database
+    // Map over the order items and ensure that we use the prices from the database
     const dbOrderItems = orderItems.map((itemFromClient) => {
       const matchingItemFromDB = itemsFromDB.find(
-        (itemFromDB) =>( itemFromDB._id.toString() === itemFromClient.productId  )
+        (itemFromDB) => itemFromDB._id.toString() === itemFromClient.productId
       );
+
+      if (!matchingItemFromDB) {
+        throw new Error(`Product not found: ${itemFromClient.productId}`);
+      }
 
       const DBOrderDetails = matchingItemFromDB.details.find(
-        (itemFromDB) =>( itemFromDB._id.toString() === itemFromClient.brandId  )
-      );
-      const DBFinanceDetails = DBOrderDetails.financials.find(
-        (itemFromDB) =>( itemFromDB._id.toString() === itemFromClient.financialId  )
+        (itemFromDB) => itemFromDB._id.toString() === itemFromClient.brandId
       );
 
-      // console.log(matchingItemFromDB);
-      // const price=DBFinanceDetails.dprice *  itemFromClient.qty
+      if (!DBOrderDetails) {
+        throw new Error(`Brand not found: ${itemFromClient.brandId}`);
+      }
+
+      const DBFinanceDetails = DBOrderDetails.financials.find(
+        (itemFromDB) => itemFromDB._id.toString() === itemFromClient.financialId
+      );
+
+      if (!DBFinanceDetails) {
+        throw new Error(`Financial details not found: ${itemFromClient.financialId}`);
+      }
+
+      // Return the client item with the price from the DB
       return {
         ...itemFromClient,
         product: matchingItemFromDB,
-        price: DBFinanceDetails.dprice,
-        _id: undefined,
+        price: DBFinanceDetails.dprice, // Use dprice for discounted price
       };
     });
-   
-    // calculate prices
-    const { itemsPrice,  shippingPrice, totalPrice } =
-      calcPrices(dbOrderItems);
-      // console.log(dbOrderItems);
+
+    // Calculate prices (ensure you have this function defined)
+    const { itemsPrice, shippingPrice, totalPrice } = calcPrices(dbOrderItems);
+
+    // Create and save the new order
     const order = new Order({
       orderItems: dbOrderItems,
       user: req.user._id,
       shippingAddress,
       paymentMethod,
       itemsPrice,
-      // taxPrice,
       shippingPrice,
       totalPrice,
     });
-     
+
     const createdOrder = await order.save();
 
     res.status(201).json(createdOrder);
   }
 });
+
 
 // @desc    Get logged in user orders
 // @route   GET /api/orders/myorders

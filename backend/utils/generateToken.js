@@ -5,14 +5,19 @@ const generateToken = (res, userId) => {
     expiresIn: '30d',
   });
 
-  // Set JWT as an HTTP-Only cookie
+  // Log the token being generated
+  // console.log('Generated Token:', token); 
+
+  // Set the token as an HTTP-only cookie if required
   res.cookie('jwt', token, {
-    httpOnly: true, // Prevents client-side JavaScript from accessing the cookie
-    secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
-    sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax', // Use 'None' for cross-site requests in production
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
   });
-  
+
+  // Return the token so it can be sent in the response body
+  return token;
 };
 
 export default generateToken;
