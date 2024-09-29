@@ -6,11 +6,13 @@ import User from '../models/userModel.js';
 const protect = asyncHandler(async (req, res, next) => {
   let token;
 
-  // Log only the necessary parts of the request
-  // console.log('Cookies:', req.cookies); 
-
-  // Read JWT from the 'jwt' cookie
-  token = req.cookies.jwt;
+  // Check for token in Authorization header
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    token = req.headers.authorization.split(' ')[1]; // Extract the token
+  } else if (req.cookies.jwt) {
+    // Fallback: Read JWT from the 'jwt' cookie
+    token = req.cookies.jwt;
+  }
 
   if (token) {
     try {
@@ -26,7 +28,7 @@ const protect = asyncHandler(async (req, res, next) => {
 
       next(); // Proceed to the next middleware or route handler
     } catch (error) {
-      // console.error('JWT Verification Error:', error.message);
+      console.error('JWT Verification Error:', error.message);
       res.status(401).json({ message: 'Not authorized, token failed' });
     }
   } else {

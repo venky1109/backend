@@ -3,7 +3,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
-import helmet from 'helmet';  // Import Helmet for security headers
+import helmet from 'helmet';  
 import connectDB from './config/db.js';
 import productRoutes from './routes/productRoutes.js';
 import userRoutes from './routes/userRoutes.js';
@@ -13,16 +13,14 @@ import promotionRoutes from './routes/promotionRoutes.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
-import Product from './models/productModel.js';  // Import product model
+import Product from './models/productModel.js';
 
-// Load environment variables
 dotenv.config();
 
-// Connect to the database (reused across WebSocket connections)
 connectDB();
 
 const app = express();
-const server = createServer(app); // Create HTTP server for both Express and Socket.IO
+const server = createServer(app); 
 const io = new Server(server, {
   cors: {
     origin: [
@@ -39,16 +37,15 @@ const io = new Server(server, {
   },
 });
 
-// Set up the port
 const port = process.env.PORT || 5000;
-const env = process.env.NODE_ENV || 'development'; // Default to development if NODE_ENV is not set
-app.set('trust proxy', 1); // Trust first proxy
+const env = process.env.NODE_ENV || 'development'; 
+app.set('trust proxy', 1); 
 
 // Enable Helmet middleware to set security-related headers
 app.use(helmet());  
 app.use(helmet.frameguard({ action: 'SAMEORIGIN' }));
 
-// Enable CORS for all routes
+// CORS configuration
 const allowedOrigins = [
   'https://manakiranaonline.onrender.com',
   'https://manakirana.online',
@@ -73,24 +70,20 @@ app.use(
   })
 );
 
-// Middleware to parse JSON and URL-encoded data
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Define routes
 app.use('/api/products', productRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/promotions', promotionRoutes);
 
-// PayPal configuration route
 app.get('/api/config/paypal', (req, res) =>
   res.send({ clientId: process.env.PAYPAL_CLIENT_ID })
 );
 
-// Define __dirname for ES6 modules
 const __dirname = path.resolve();
 
 if (env === 'production') {
@@ -106,28 +99,24 @@ if (env === 'production') {
   });
 }
 
-// Error handling middleware
 app.use(notFound);
 app.use(errorHandler);
 
-const clients = {};  // Object to store cart items for connected clients
+const clients = {};  
 
-// MongoDB Change Streams to monitor product updates
+// WebSocket handling
 io.on('connection', (socket) => {
   console.log(`Client connected: ${socket.id}`);
 
-  // Handle product updates in the MongoDB collection
-  let productChangeStream;  // Define outside to close later
+  let productChangeStream;  
 
-  // Listen for the client sending their cart items
   socket.on('clientCart', async (cartItems) => {
-    clients[socket.id] = cartItems;  // Store client's cart items on the server
+    clients[socket.id] = cartItems;  
 
     const updatesToSend = [];
 
-    // Check each product in the client's cart for updates
     for (const cartItem of cartItems) {
-      const product = await Product.findById(cartItem.productId);  // Fetch product from DB
+      const product = await Product.findById(cartItem.productId);
       if (product) {
         const matchingDetail = product.details.find(
           (detail) => detail._id.toString() === cartItem.brandId
@@ -139,27 +128,24 @@ io.on('connection', (socket) => {
           );
 
           if (matchingFinancial) {
-            // Check if there are any updates (e.g., price, dprice, countInStock)
             if (
               matchingFinancial.price !== cartItem.price ||
               matchingFinancial.dprice !== cartItem.dprice ||
               matchingFinancial.countInStock !== cartItem.countInStock
             ) {
-              updatesToSend.push(product);  // If product has changed, add to updates array
+              updatesToSend.push(product);
             }
           }
         }
       }
     }
 
-    // If there are updates to send, emit them to the client
     if (updatesToSend.length > 0) {
       updatesToSend.forEach((updatedProduct) => {
-        socket.emit('productUpdate', updatedProduct);  // Send missed updates
+        socket.emit('productUpdate', updatedProduct);
       });
     }
 
-    // Initialize the change stream only once, when cart is sent
     if (!productChangeStream) {
       productChangeStream = Product.watch();
 
@@ -171,7 +157,7 @@ io.on('connection', (socket) => {
             const updatedProduct = await Product.findById(updatedProductId);
 
             if (updatedProduct) {
-              io.emit('productUpdate', updatedProduct); // Emit to all connected clients
+              io.emit('productUpdate', updatedProduct);
             }
           } catch (error) {
             console.error('Error fetching updated product:', error.message);
@@ -181,12 +167,10 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle client disconnection and cleanup
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
-    delete clients[socket.id];  // Remove client cart from tracking when they disconnect
+    delete clients[socket.id];
 
-    // Clean up change stream
     if (productChangeStream) {
       productChangeStream.close();
       productChangeStream = null;
@@ -194,7 +178,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// Start the server using the "server.listen()" method
 server.listen(port, () =>
   console.log(`Server running in ${env} mode on port ${port}`)
 );
