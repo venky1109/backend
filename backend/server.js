@@ -62,7 +62,22 @@ const allowedOrigins = [
 
 app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('Content-Security-Policy', "frame-ancestors 'self';");
+
+  // Content Security Policy to control sources for content
+  res.setHeader(
+    'Content-Security-Policy',
+    "frame-ancestors 'self' https://manakirana.com https://manakirana.online https://etrug.app;"
+  );
+
+  // Enforce HTTPS with HSTS
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+
+  // Prevent MIME sniffing
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  // Set Referrer Policy
+  res.setHeader('Referrer-Policy', 'no-referrer-when-downgrade');
+
   next();
 });
 
