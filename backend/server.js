@@ -3,7 +3,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
-import helmet from 'helmet';  
+// import helmet from 'helmet';  
 import connectDB from './config/db.js';
 import productRoutes from './routes/productRoutes.js';
 import userRoutes from './routes/userRoutes.js';
@@ -21,6 +21,7 @@ connectDB();
 
 const app = express();
 const server = createServer(app); 
+
 const io = new Server(server, {
   cors: {
     origin: [
@@ -41,9 +42,11 @@ const port = process.env.PORT || 5000;
 const env = process.env.NODE_ENV || 'development'; 
 app.set('trust proxy', 1); 
 
-// Enable Helmet middleware to set security-related headers
-app.use(helmet());  
-app.use(helmet.frameguard({ action: 'SAMEORIGIN' }));
+// // Enable Helmet middleware to set security-related headers
+// app.use(helmet());  
+// app.use(helmet.frameguard({ action: 'SAMEORIGIN' }));
+
+
 
 // CORS configuration
 const allowedOrigins = [
@@ -55,6 +58,16 @@ const allowedOrigins = [
   'https://manakirana.com',
   'https://www.etrug.app',
 ];
+
+
+app.use((req, res, next) => {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'self';");
+  next();
+});
+
+
+
 
 app.use(
   cors({
