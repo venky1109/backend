@@ -17,11 +17,12 @@ import {
   forgotPassword,
 } from '../controllers/userController.js';
 import { protect, admin } from '../middleware/authMiddleware.js';
+import loginLimiter from '../utils/rateLimiter.js';
 
 const router = express.Router();
 
 router.route('/').post(registerUser).get(protect, admin, getUsers);
-router.post('/auth', authUser);
+router.post('/auth', loginLimiter,authUser);
 router.post('/logout', logoutUser);
 router
   .route('/profile')
@@ -29,7 +30,7 @@ router
   .put(protect, updateUserProfile);
 
 // Forgot Password route
-router.post('/forgot-password', forgotPassword);
+router.post('/forgot-password',loginLimiter, forgotPassword);
 // Address and location routes
 router.route('/address')
   .get(protect, getAddressAndLocation)
