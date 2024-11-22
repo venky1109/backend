@@ -5,9 +5,11 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Read keys from .env
-const publicKey = fs.readFileSync(process.env.PUBLIC_KEY_PATH, 'utf8');
-const privateKey = fs.readFileSync(process.env.PRIVATE_KEY_PATH, 'utf8');
+// // Read keys from .env
+// const publicKey = fs.readFileSync(process.env.PUBLIC_KEY_PATH, 'utf8');
+// const privateKey = fs.readFileSync(process.env.PRIVATE_KEY_PATH, 'utf8');
+const publicKey = process.env.PUBLIC_KEY;
+const privateKey = process.env.PRIVATE_KEY;
 
 // Initialize Juspay
 // const baseUrl = process.env.ENVIRONMENT === 'production'
