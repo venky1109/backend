@@ -29,3 +29,6 @@ uploads/*jpg
 
 # API tests
 http
+
+#key files
+*.pem

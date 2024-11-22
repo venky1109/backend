@@ -10,6 +10,7 @@ import userRoutes from './routes/userRoutes.js';
 import orderRoutes from './routes/orderRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import promotionRoutes from './routes/promotionRoutes.js';
+import paymentRoutes from './routes/paymentRoutes.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
@@ -32,6 +33,8 @@ const io = new Server(server, {
       'http://localhost:3000',
       'https://manakirana.com',
       'https://www.etrug.app',
+      'https://smartgatewayuat.hdfcbank.com', // Juspay's Sandbox Gateway
+      'https://smartgateway.hdfcbank.com', // Juspay's Production Gateway
     ],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
@@ -57,6 +60,8 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://manakirana.com',
   'https://www.etrug.app',
+  'https://smartgatewayuat.hdfcbank.com', // Juspay's Sandbox Gateway
+  'https://smartgateway.hdfcbank.com', // Juspay's Production Gateway
 ];
 
 
@@ -66,7 +71,7 @@ app.use((req, res, next) => {
   // Content Security Policy to control sources for content
   res.setHeader(
     'Content-Security-Policy',
-    "frame-ancestors 'self' https://manakirana.com https://manakirana.online https://etrug.app;"
+    "frame-ancestors 'self' https://manakirana.com https://manakirana.online https://etrug.app https://smartgatewayuat.hdfcbank.com https://smartgateway.hdfcbank.com ;"
   );
 
   // Enforce HTTPS with HSTS
@@ -87,9 +92,11 @@ app.use((req, res, next) => {
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      // if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+        if (!origin || origin === 'null' || allowedOrigins.includes(origin)){
         callback(null, true);
       } else {
+        console.error(`CORS Blocked Origin: ${origin}`);
         callback(new Error('Not allowed by CORS'));
       }
     },
@@ -107,6 +114,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/promotions', promotionRoutes);
+app.use('/api/payments', paymentRoutes);
 
 app.get('/api/config/paypal', (req, res) =>
   res.send({ clientId: process.env.PAYPAL_CLIENT_ID })

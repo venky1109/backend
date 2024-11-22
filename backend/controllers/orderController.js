@@ -74,6 +74,8 @@ import { verifyPayPalPayment, checkIfNewTransaction } from '../utils/paypal.js';
 
 const addOrderItems = asyncHandler(async (req, res) => {
   const { orderItems, shippingAddress, paymentMethod } = req.body;
+  console.log('Request Body:', req.body);
+
 
   if (orderItems && orderItems.length === 0) {
     res.status(400);
