@@ -45,7 +45,9 @@ export const initiatePayment = async (req, res) => {
 
     // Create return URL
     // const returnUrl = `${req.protocol}://${req.hostname}:${process.env.PORT || 5000}/api/payments/handleJuspayResponse`;
-    const returnUrl = `${req.protocol}://${req.hostname}}/api/payments/handleJuspayResponse`;
+    // const returnUrl = `${req.protocol}://${req.hostname}}/api/payments/handleJuspayResponse`;
+    const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse`;
+
 
     try {
         const sessionResponse = await juspay.orderSession.create({
