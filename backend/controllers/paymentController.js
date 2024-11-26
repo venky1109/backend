@@ -81,7 +81,8 @@ export const handlePaymentResponse = async (req, res) => {
     try {
         const statusResponse = await juspay.order.status(orderId);
         const orderStatus = statusResponse.status;
-        console.log('JusPAY Response API'+statusResponse)
+        console.log('JusPAY Response API:', JSON.stringify(statusResponse, null, 2));
+
 
         let redirectUrl = `${process.env.FRONTEND_URL}/payment/failure`;
         if (orderStatus === 'CHARGED') {
