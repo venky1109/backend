@@ -142,7 +142,7 @@ const clients = {};
 
 // WebSocket handling
 io.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
+  // console.log(`Client connected: ${socket.id}`);
 
   let productChangeStream;  
 
@@ -204,7 +204,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log(`Client disconnected: ${socket.id}`);
+    // console.log(`Client disconnected: ${socket.id}`);
     delete clients[socket.id];
 
     if (productChangeStream) {

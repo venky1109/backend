@@ -2,7 +2,9 @@ import asyncHandler from '../middleware/asyncHandler.js';
 import Order from '../models/orderModel.js';
 import Product from '../models/productModel.js';
 import { calcPrices } from '../utils/calcPrices.js';
-import { verifyPayPalPayment, checkIfNewTransaction } from '../utils/paypal.js';
+// import { verifyPayPalPayment, checkIfNewTransaction } from '../utils/paypal.js';
+// import asyncHandler from 'express-async-handler';
+// import { Juspay, APIError } from 'expresscheckout-nodejs';
 
 // @desc    Create new order
 // @route   POST /api/orders
@@ -71,10 +73,21 @@ import { verifyPayPalPayment, checkIfNewTransaction } from '../utils/paypal.js';
 //     res.status(201).json(createdOrder);
 //   }
 // });
-
+// const juspay = new Juspay({
+//   merchantId: process.env.MERCHANT_ID,
+//   baseUrl:
+//     process.env.ENVIRONMENT === 'production'
+//       ? 'https://smartgateway.hdfcbank.com'
+//       : 'https://smartgatewayuat.hdfcbank.com',
+//   jweAuth: {
+//     keyId: process.env.KEY_UUID,
+//     publicKey: process.env.PUBLIC_KEY,
+//     privateKey: process.env.PRIVATE_KEY,
+//   },
+// });
 const addOrderItems = asyncHandler(async (req, res) => {
-  const { orderItems, shippingAddress, paymentMethod } = req.body;
-  console.log('Request Body:', req.body);
+  const { orderItems, shippingAddress, paymentMethod,orderId } = req.body;
+  // console.log('Request Body:', req.body);
 
 
   if (orderItems && orderItems.length === 0) {
@@ -132,6 +145,7 @@ const addOrderItems = asyncHandler(async (req, res) => {
       itemsPrice,
       shippingPrice,
       totalPrice,
+      orderId,
     });
 
     const createdOrder = await order.save();
@@ -169,40 +183,93 @@ const getOrderById = asyncHandler(async (req, res) => {
 // @desc    Update order to paid
 // @route   PUT /api/orders/:id/pay
 // @access  Private
-const updateOrderToPaid = asyncHandler(async (req, res) => {
-  // NOTE: here we need to verify the payment was made to PayPal before marking
-  // the order as paid
-  const { verified, value } = await verifyPayPalPayment(req.body.id);
-  if (!verified) throw new Error('Payment not verified');
+// const updateOrderToPaid = asyncHandler(async (req, res) => {
+//   const { order_id } = req.body;
 
-  // check if this transaction has been used before
-  const isNewTransaction = await checkIfNewTransaction(Order, req.body.id);
-  if (!isNewTransaction) throw new Error('Transaction has been used before');
+//   if (!order_id) {
+//     res.status(400);
+//     throw new Error('Order ID is required');
+//   }
+
+//   try {
+//     // Verify payment status with Juspay
+//     const statusResponse = await juspay.order.status(order_id);
+//     const orderStatus = statusResponse.status;
+
+//     if (orderStatus !== 'CHARGED') {
+//       throw new Error(`Payment not verified. Status: ${orderStatus}`);
+//     }
+
+//     // Check if the transaction has been used before
+//     const isNewTransaction = await Order.exists({ 'paymentResult.id': order_id });
+//     if (isNewTransaction) {
+//       throw new Error('Transaction has already been used');
+//     }
+
+//     // Find the order by ID in the database
+//     const order = await Order.findById(req.params.id);
+//     if (!order) {
+//       res.status(404);
+//       throw new Error('Order not found');
+//     }
+
+//     // Validate that the correct amount was paid
+//     const paidCorrectAmount = order.totalPrice.toString() === statusResponse.amount.toString();
+//     if (!paidCorrectAmount) {
+//       throw new Error('Incorrect amount paid');
+//     }
+
+//     // Mark the order as paid and save the payment details
+//     order.isPaid = true;
+//     order.paidAt = Date.now();
+//     order.paymentResult = {
+//       id: order_id,
+//       status: orderStatus,
+//       update_time: statusResponse.last_updated,
+//       phone_Number: statusResponse.customer_phone,
+//     };
+
+//     const updatedOrder = await order.save();
+
+//     res.json(updatedOrder);
+//   } catch (error) {
+//     console.error('Update Order to Paid Error:', error.message);
+//     res.status(500);
+//     throw new Error(error.message || 'Internal Server Error');
+//   }
+// });
+const updateOrderToPaid = asyncHandler(async (req, res) => {
+  const { id, status, update_time } = req.body;
+
+  if (!id) {
+    res.status(400);
+    throw new Error('Order ID is required');
+  }
 
   const order = await Order.findById(req.params.id);
 
   if (order) {
-    // check the correct amount was paid
-    const paidCorrectAmount = order.totalPrice.toString() === value;
-    if (!paidCorrectAmount) throw new Error('Incorrect amount paid');
+    if (status !== 'CHARGED') {
+      res.status(400);
+      throw new Error('Payment not verified');
+    }
 
     order.isPaid = true;
-    order.paidAt = Date.now();
+    order.paidAt = update_time;
     order.paymentResult = {
-      id: req.body.id,
-      status: req.body.status,
-      update_time: req.body.update_time,
-      phone_Number: req.body.payer.phone_Number,
+      id, // Juspay Order ID
+      status,
+      update_time,
     };
 
     const updatedOrder = await order.save();
-
     res.json(updatedOrder);
   } else {
     res.status(404);
     throw new Error('Order not found');
   }
 });
+
 
 // @desc    Update order to delivered
 // @route   GET /api/orders/:id/deliver
