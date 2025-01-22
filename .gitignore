@@ -33,3 +33,4 @@ http
 #key files
 *.pem
 logs/juspay-sdk.log
+*.log
