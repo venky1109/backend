@@ -2,7 +2,8 @@ import express from 'express';
 const router = express.Router();
 import {
   getProducts,
-  getProductById,
+  // getProductById,
+  getProductBySlug,  // <-- Updated function for fetching by slug
   createProduct,
   updateProduct,
   deleteProduct,
@@ -27,9 +28,16 @@ router.get('/categories/:category/products', getProductsByCategory);
 router.route('/:id/reviews').post(protect, checkObjectId, createProductReview);
 router.get('/top', getTopProducts);
 router.post('/financials/batch', getBatchFinancialDetails); 
-router
-  .route('/:id')
-  .get(checkObjectId, getProductById)
+// router
+//   .route('/:id')
+//   .get(checkObjectId, getProductById)
+//   .put(protect, admin, checkObjectId, updateProduct)
+//   .delete(protect, admin, checkObjectId, deleteProduct);
+// Updated to fetch by slug
+router.route('/:slug').get(getProductBySlug);  
+
+// Admin-only routes still use ID
+router.route('/:id')
   .put(protect, admin, checkObjectId, updateProduct)
   .delete(protect, admin, checkObjectId, deleteProduct);
 router

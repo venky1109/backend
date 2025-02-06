@@ -33,3 +33,7 @@ http
 #key files
 *.pem
 logs/juspay-sdk.log
+
+# Ignore data directory
+backend/data/
+backend/data/products.js

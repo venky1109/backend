@@ -1,4 +1,6 @@
 import mongoose from 'mongoose';
+import slugify from 'slugify';
+
 
 // Define a schema for the financial details
 const financialSchema = new mongoose.Schema({
@@ -29,11 +31,21 @@ const productDetailSchema = new mongoose.Schema({
 // Define the main product schema
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
+  slug: { type: String, unique: true }, 
   category: { type: String, required: true },
   rating: { type: Number },
   numReviews: { type: Number },
   details: [productDetailSchema], // Array of product details
 });
+
+// Middleware to generate slug before saving the product
+productSchema.pre("save", function (next) {
+  if (this.name && !this.slug) {
+    this.slug = slugify(this.name, { lower: true, strict: true });
+  }
+  next();
+});
+
 
 // Create a Mongoose model
 const Product = mongoose.model('Product', productSchema);

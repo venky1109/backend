@@ -87,20 +87,36 @@ export const getProductsByCategory = asyncHandler(async (req, res) => {
 // @desc    Fetch single product
 // @route   GET /api/products/:id
 // @access  Public
-const getProductById = asyncHandler(async (req, res) => {
-  // NOTE: checking for valid ObjectId to prevent CastError moved to separate
-  // middleware. See README for more info.
+// const getProductById = asyncHandler(async (req, res) => {
+//   // NOTE: checking for valid ObjectId to prevent CastError moved to separate
+//   // middleware. See README for more info.
 
-  const product = await Product.findById(req.params.id);
+//   const product = await Product.findById(req.params.id);
+//   if (product) {
+//     return res.json(product);
+//   } else {
+//     // NOTE: this will run if a valid ObjectId but no product was found
+//     // i.e. product may be null
+//     res.status(404);
+//     throw new Error('Product not found');
+//   }
+// });
+const getProductBySlug = asyncHandler(async (req, res) => {
+  // console.log("Incoming Request Params:", req.params);  // ✅ Debugging log
+
+  // Find the product by slug instead of ID
+  const product = await Product.findOne({ slug: req.params.slug });
+
   if (product) {
+    // console.log("Product Found:", product);  // ✅ Log the product if found
     return res.json(product);
   } else {
-    // NOTE: this will run if a valid ObjectId but no product was found
-    // i.e. product may be null
+    // console.log("Product Not Found for Slug:", req.params.slug);  // ✅ Log missing slug cases
     res.status(404);
-    throw new Error('Product not found');
+    throw new Error("Product not found");
   }
 });
+
 
 // @desc    Create a product
 // @route   POST /api/products
@@ -487,7 +503,7 @@ const getTopProducts = asyncHandler(async (req, res) => {
 export {
   getProducts,
   getCategories,
-  getProductById,
+  getProductBySlug,
   createProduct,
   createProductDetail,
   createFinancialDetail,
