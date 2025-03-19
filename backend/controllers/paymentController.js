@@ -18,7 +18,7 @@ const privateKey = process.env.PRIVATE_KEY;
 //     ? 'https://smartgateway.hdfcbank.com'
 //     : 'https://smartgatewayuat.hdfcbank.com';
 
-const baseUrl = 'https://smartgatewayuat.hdfcbank.com';
+const baseUrl = 'https://smartgateway.hdfcbank.com';
 
 const juspay = new Juspay({
     merchantId: process.env.MERCHANT_ID,
