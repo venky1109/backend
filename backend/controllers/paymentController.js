@@ -185,8 +185,8 @@ export const handlePaymentResponse = async (req, res) => {
         }
 
         // let redirectUrl = `${process.env.FRONTEND_URL}/payment/failure`;
-        // let redirectUrl = `https://www.manakirana.com/payment/failure`;
-        let redirectUrl = new URL(`/payment/failure`, process.env.FRONTEND_URL).toString();
+        let redirectUrl = `https://www.manakirana.com/payment/failure`;
+        // let redirectUrl = new URL(`/payment/failure`, process.env.FRONTEND_URL).toString();
 
 
 
@@ -205,7 +205,8 @@ export const handlePaymentResponse = async (req, res) => {
 
             // console.log(`Order ID ${orderId} marked as paid successfully.`);
             // redirectUrl = `${process.env.FRONTEND_URL}/payment/success?orderId=${orderId}`;
-            redirectUrl = new URL(`/payment/success?orderId=${orderId}`, process.env.FRONTEND_URL).toString();
+            // redirectUrl = new URL(`/payment/success?orderId=${orderId}`, process.env.FRONTEND_URL).toString();
+            redirectUrl = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
 
         } else {
             console.error(`Payment for Order ID ${orderId} is not successful. Status: ${orderStatus}`);
