@@ -184,7 +184,11 @@ export const handlePaymentResponse = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Amount tampering detected. Payment rejected.' });
         }
 
-        let redirectUrl = `${process.env.FRONTEND_URL}/payment/failure`;
+        // let redirectUrl = `${process.env.FRONTEND_URL}/payment/failure`;
+        // let redirectUrl = `https://www.manakirana.com/payment/failure`;
+        let redirectUrl = new URL(`/payment/failure`, process.env.FRONTEND_URL).toString();
+
+
 
         // Update the order status if the payment is successful
         if (orderStatus === 'CHARGED') {
@@ -200,7 +204,9 @@ export const handlePaymentResponse = async (req, res) => {
             await order.save();
 
             // console.log(`Order ID ${orderId} marked as paid successfully.`);
-            redirectUrl = `${process.env.FRONTEND_URL}/payment/success?orderId=${orderId}`;
+            // redirectUrl = `${process.env.FRONTEND_URL}/payment/success?orderId=${orderId}`;
+            redirectUrl = new URL(`/payment/success?orderId=${orderId}`, process.env.FRONTEND_URL).toString();
+
         } else {
             console.error(`Payment for Order ID ${orderId} is not successful. Status: ${orderStatus}`);
         }
