@@ -32,7 +32,7 @@ const juspay = new Juspay({
 
 // Controller: Initiate Payment
 export const initiatePayment = async (req, res) => {
-    console.log('Request body:', req.body);
+    // console.log('Request body:', req.body);
 
     const { amount, customerId, cartItems,order_id } = req.body;
 
@@ -110,7 +110,7 @@ export const initiatePayment = async (req, res) => {
             currency: 'INR',
         });
 
-        console.log('Backend returnUrl:', returnUrl);
+        // console.log('Backend returnUrl:', returnUrl);
 
 
         // Send response to the frontend
@@ -165,7 +165,7 @@ export const handlePaymentResponse = async (req, res) => {
         const statusResponse = await juspay.order.status(orderId);
         const orderStatus = statusResponse.status;
 
-        console.log('JusPAY Response API:', JSON.stringify(statusResponse, null, 2));
+        // console.log('JusPAY Response API:', JSON.stringify(statusResponse, null, 2));
 
         // Fetch the corresponding order from the database
         // const order = await Order.findOne({ orderId });
@@ -213,7 +213,7 @@ export const handlePaymentResponse = async (req, res) => {
         }
 
         // Redirect to the frontend based on payment status
-        console.log("redirectUrl"+redirectUrl)
+        // console.log("redirectUrl"+redirectUrl)
         return res.redirect(redirectUrl);
     } catch (error) {
         console.error('Error handling payment response:', error.message || error);
