@@ -110,6 +110,8 @@ export const initiatePayment = async (req, res) => {
             currency: 'INR',
         });
 
+        console.log("returnUrl"+sessionResponse)
+
         // Send response to the frontend
         res.status(200).json(makeJuspayResponse(sessionResponse));
     } catch (error) {

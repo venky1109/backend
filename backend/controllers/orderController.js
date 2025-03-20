@@ -87,7 +87,7 @@ import { calcPrices } from '../utils/calcPrices.js';
 // });
 const addOrderItems = asyncHandler(async (req, res) => {
   const { orderItems, shippingAddress, paymentMethod,orderId } = req.body;
-  // console.log('Request Body:', req.body);
+  console.log('Request Body:', req.body);
 
 
   if (orderItems && orderItems.length === 0) {
