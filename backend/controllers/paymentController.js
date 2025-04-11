@@ -30,6 +30,76 @@ const juspay = new Juspay({
     },
 });
 
+export const initiatePaymentAtDelivery = async (req, res) => {
+    console.log('Request body:', req.body);
+
+    const { amount, customerId ,order_id } = req.body;
+
+    if (!amount || !customerId ) {
+        return res.status(400).json({
+            success: false,
+            message: 'Amount, Customer ID, and Cart Items are required',
+        });
+    }
+
+    try {
+ 
+           // Step 1: Fetch order from DB using order_id
+    const order = await Order.findById(order_id);
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found for provided ID',
+      });
+    }
+
+    const orderAmount = order.totalPrice;
+
+    const dbAmount = parseFloat(order.totalPrice).toFixed(2);
+    const clientAmount = parseFloat(amount).toFixed(2);
+
+    //  Amount Tampering Check
+    if (dbAmount !== clientAmount) {
+      console.error(`Amount mismatch. DB: ${dbAmount}, Client: ${clientAmount}`);
+      return res.status(400).json({
+        success: false,
+        message: 'Amount mismatch detected. Possible tampering.',
+      });
+    }
+
+
+
+        // Generate return URL
+        const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse`;
+
+        // Create Juspay order session
+        const sessionResponse = await juspay.orderSession.create({
+            order_id: order_id,
+            amount: orderAmount.toFixed(2),
+            payment_page_client_id: process.env.PAYMENT_PAGE_CLIENT_ID,
+            customer_id: customerId,
+            action: 'paymentPage',
+            return_url: returnUrl,
+            currency: 'INR',
+        });
+
+        // console.log('Backend returnUrl:', returnUrl);
+
+
+        // Send response to the frontend
+        res.status(200).json(makeJuspayResponse(sessionResponse));
+    } catch (error) {
+        console.error('Error initiating payment:', error.message);
+
+        if (error instanceof APIError) {
+            return res.status(400).json(makeError(error.message));
+        }
+
+        res.status(500).json(makeError('Internal Server Error. Please try again.'));
+    }
+};
+
 // Controller: Initiate Payment
 export const initiatePayment = async (req, res) => {
     // console.log('Request body:', req.body);
