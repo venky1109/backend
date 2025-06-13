@@ -31,7 +31,7 @@ const juspay = new Juspay({
 });
 
 export const initiatePaymentAtDelivery = async (req, res) => {
-    console.log('Request body:', req.body);
+    // console.log('Request body:', req.body);
 
     const { amount, customerId ,order_id } = req.body;
 

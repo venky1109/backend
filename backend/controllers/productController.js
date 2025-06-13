@@ -500,6 +500,105 @@ const getTopProducts = asyncHandler(async (req, res) => {
   res.json(products);
 });
 
+// const updateStockById = asyncHandler(async (req, res) => {
+//   const { brandID, financialID, newQuantity } = req.body;
+// console.log('updateStockById'+JSON.stringify(req.body))
+// // console.log(req.params.productID)
+// // console.log(JSON.stringify(req.params))
+// console.log(req.params)
+
+
+//   if (!brandID || !financialID || typeof newQuantity !== 'number') {
+//     res.status(400);
+//     throw new Error('brandID, financialID, and valid newQuantity are required');
+//   }
+
+//   const product = await Product.findById(req.params.id);
+//   if (!product) {
+//     res.status(404);
+//     throw new Error('Product not found');
+//   }
+
+//   const brand = product.details.find((d) => d._id.toString() === brandID);
+//   if (!brand) {
+//     res.status(404);
+//     throw new Error(`Brand not found: ${brandID}`);
+//   }
+
+//   const financial = brand.financials.find((f) => f._id.toString() === financialID);
+//   if (!financial) {
+//     res.status(404);
+//     throw new Error(`Financial record not found: ${financialID}`);
+//   }
+
+//   financial.countInStock = newQuantity;
+
+//   await product.save();
+//   res.status(200).json({
+//     message: 'Stock updated',
+//     productID: req.params.id,
+//     brandID,
+//     financialID,
+//     newQuantity,
+//   });
+// });
+
+const updateStockById = asyncHandler(async (req, res) => {
+  const { brandID, financialID, newQuantity } = req.body;
+  const { id: productId } = req.params;
+
+  console.log('🛠️ Updating stock for:', { productId, brandID, financialID, newQuantity });
+
+  if (!brandID || !financialID || typeof newQuantity !== 'number') {
+    res.status(400);
+    throw new Error('brandID, financialID, and valid newQuantity are required');
+  }
+
+  const product = await Product.findById(productId);
+  if (!product) {
+    res.status(404);
+    throw new Error('Product not found');
+  }
+
+  let brandFound = false;
+  let financialFound = false;
+
+  for (const brand of product.details) {
+    if (brand._id.toString() === brandID) {
+      brandFound = true;
+      for (const financial of brand.financials) {
+        if (financial._id.toString() === financialID) {
+          financialFound = true;
+          financial.countInStock = newQuantity;
+          break;
+        }
+      }
+      break;
+    }
+  }
+
+  if (!brandFound) {
+    res.status(404);
+    throw new Error(`Brand not found: ${brandID}`);
+  }
+
+  if (!financialFound) {
+    res.status(404);
+    throw new Error(`Financial record not found: ${financialID}`);
+  }
+
+  await product.save();
+
+  res.status(200).json({
+    message: 'Stock updated successfully',
+    productID: product._id,
+    brandID,
+    financialID,
+    newQuantity,
+  });
+});
+
+
 export {
   getProducts,
   getCategories,
@@ -515,4 +614,5 @@ export {
   updateProductDetail,
   createProductReview,
   getTopProducts,
+  updateStockById,
 };

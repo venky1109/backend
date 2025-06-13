@@ -16,10 +16,28 @@ import {
   addAddressAndLocation,
   forgotPassword,
 } from '../controllers/userController.js';
+import {
+  getCustomerByPhoneNoPOS,
+  createCustomerPOS,
+  updateCustomerByPhoneNoPOS,
+  deleteCustomerPOS,
+  getFilteredCustomersPOS,
+} from '../controllers/posCustomerController.js';
+
 import { protect, admin } from '../middleware/authMiddleware.js';
+import { protectPOS as posProtect, cashierOrAdmin, admin as posAdmin } from '../middleware/posAuthMiddleware.js';
 import loginLimiter from '../utils/rateLimiter.js';
 
 const router = express.Router();
+
+// POS ROUTES
+router.route('/pos/:phoneNo').get(posProtect, cashierOrAdmin, getCustomerByPhoneNoPOS);
+router.route('/pos').get(posProtect, posAdmin, getFilteredCustomersPOS).post(posProtect, cashierOrAdmin, createCustomerPOS);
+router.route('/pos/phone/:phoneNo')
+  .put(posProtect, cashierOrAdmin, updateCustomerByPhoneNoPOS)
+  .delete(posProtect, posAdmin, deleteCustomerPOS);
+// END of POS ROUTES  
+
 
 router.route('/').post(registerUser).get(protect, admin, getUsers);
 router.post('/auth', loginLimiter,authUser);

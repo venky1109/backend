@@ -87,7 +87,7 @@ import { calcPrices } from '../utils/calcPrices.js';
 // });
 const addOrderItems = asyncHandler(async (req, res) => {
   const { orderItems, shippingAddress, paymentMethod,orderId } = req.body;
-  // console.log('Request Body:', req.body);
+  // console.log('Request Body:', shippingAddress);
 
 
   if (orderItems && orderItems.length === 0) {
@@ -133,8 +133,23 @@ const addOrderItems = asyncHandler(async (req, res) => {
       };
     });
 
+    // Convert raw lat/lng to GeoJSON Point if available
+    if (shippingAddress?.location?.latitude && shippingAddress?.location?.longitude) {
+      const { latitude, longitude } = shippingAddress.location;
+      shippingAddress.location = {
+        type: 'Point',
+        coordinates: [longitude, latitude], // GeoJSON expects [lng, lat]
+      };
+    } else {
+      shippingAddress.location = {
+        type: 'Point',
+        coordinates: [], // fallback if missing
+      };
+    }
     // Calculate prices (ensure you have this function defined)
     const { itemsPrice, shippingPrice, totalPrice } = calcPrices(dbOrderItems);
+    const source = 'ONLINE';
+
 
     // Create and save the new order
     const order = new Order({
@@ -146,6 +161,7 @@ const addOrderItems = asyncHandler(async (req, res) => {
       shippingPrice,
       totalPrice,
       orderId,
+      source,
     });
 
     const createdOrder = await order.save();
@@ -178,6 +194,14 @@ const getOrderById = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Order not found');
   }
+});
+const getOrderItemsByOrderId = asyncHandler(async (req, res) => {
+  const order = await Order.findById(req.params.id);
+  if (!order) {
+    res.status(404);
+    throw new Error('Order not found');
+  }
+  res.json(order.orderItems || []);
 });
 
 // @desc    Update order to paid
@@ -293,15 +317,25 @@ const updateOrderToDelivered = asyncHandler(async (req, res) => {
 // @desc    Get all orders
 // @route   GET /api/orders
 // @access  Private/Admin
+// const getOrders = asyncHandler(async (req, res) => {
+//   const orders = await Order.find({}).populate('user', 'id name');
+//   res.json(orders);
+// });
+
 const getOrders = asyncHandler(async (req, res) => {
-  const orders = await Order.find({}).populate('user', 'id name');
+  const orders = await Order.find({})
+    .sort({ createdAt: -1 })
+    .limit(20) // or whatever limit you want
+    .populate('user', '_id name phoneNo');
   res.json(orders);
 });
+
 
 export {
   addOrderItems,
   getMyOrders,
   getOrderById,
+  getOrderItemsByOrderId,
   updateOrderToPaid,
   updateOrderToDelivered,
   getOrders,

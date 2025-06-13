@@ -11,6 +11,9 @@ import orderRoutes from './routes/orderRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import promotionRoutes from './routes/promotionRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
+import PosUserRoutes from './routes/posUserRoutes.js';
+
+
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
@@ -31,6 +34,7 @@ const io = new Server(server, {
       'https://etrug.app',
       'http://192.168.1.6:3000',
       'http://localhost:3000',
+      'http://localhost:3001',
       'https://manakirana.com',
       'https://www.etrug.app',
       'https://smartgatewayuat.hdfcbank.com', // Juspay's Sandbox Gateway
@@ -41,7 +45,7 @@ const io = new Server(server, {
   },
 });
 
-const port = process.env.PORT || 5000;
+const port = process.env.PORT || 6000;
 const env = process.env.NODE_ENV || 'development'; 
 app.set('trust proxy', 1); 
 
@@ -58,6 +62,7 @@ const allowedOrigins = [
   'https://etrug.app',
   'http://192.168.1.6:3000',
   'http://localhost:3000',
+  'http://localhost:3001',
   'https://manakirana.com',
   'https://www.etrug.app',
   'https://smartgatewayuat.hdfcbank.com', // Juspay's Sandbox Gateway
@@ -111,10 +116,13 @@ app.use(cookieParser());
 
 app.use('/api/products', productRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/posusers', PosUserRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/promotions', promotionRoutes);
 app.use('/api/payments', paymentRoutes);
+
+
 
 app.get('/api/config/paypal', (req, res) =>
   res.send({ clientId: process.env.PAYPAL_CLIENT_ID })

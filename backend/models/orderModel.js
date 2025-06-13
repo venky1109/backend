@@ -16,7 +16,6 @@ const orderSchema = mongoose.Schema(
         qty: { type: Number, required: true },
         image: { type: String, required: true },
         price: { type: Number, required: true },
-        // pricePerPack: { type: Number, required: true },
         product: {
           type: mongoose.Schema.Types.ObjectId,
           required: true,
@@ -24,12 +23,25 @@ const orderSchema = mongoose.Schema(
         },
       },
     ],
+ 
+
     shippingAddress: {
-      street: { type: String, required: true },
-      city: { type: String, required: true },
-      postalCode: { type: String, required: true },
-      country: { type: String },
+  street: { type: String, required: true },
+  city: { type: String, required: true },
+  postalCode: { type: String, required: true },
+  country: { type: String },
+  location: {
+    type: {
+      type: String,
+      enum: ['Point'],
+      default: 'Point',
     },
+    coordinates: {
+      type: [Number], // [longitude, latitude]
+    },
+  },
+},
+
     paymentMethod: {
       type: String,
       required: true,
@@ -45,11 +57,6 @@ const orderSchema = mongoose.Schema(
       required: true,
       default: 0.0,
     },
-    // taxPrice: {
-    //   type: Number,
-    //   required: true,
-    //   default: 0.0,
-    // },
     shippingPrice: {
       type: Number,
       required: true,
@@ -77,17 +84,29 @@ const orderSchema = mongoose.Schema(
       type: Boolean,
       required: true,
       default: false,
-    },    
+    },
     isDelivered: {
       type: Boolean,
       required: true,
       default: false,
     },
-    deliveredAt: {
-      type: Date,
-    },
-    orderId:{
+
+packedAt: { type: Date },
+
+
+dispatchedAt: { type: Date },
+
+deliveredAt: { type: Date },
+    orderId: {
       type: String,
+    },
+
+    // ✅ Add this block:
+    source: {
+      type: String,
+      enum: ['CASHIER', 'ONLINE'],
+      required: true,
+      default: 'ONLINE',
     },
   },
   {

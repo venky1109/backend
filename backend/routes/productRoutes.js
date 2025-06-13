@@ -17,9 +17,11 @@ import {
   getCategories,
   getFinancialDetails,
   getBatchFinancialDetails,
-
+  updateStockById,
 } from '../controllers/productController.js';
 import { protect, admin } from '../middleware/authMiddleware.js';
+// import { protectPOS } from '../middleware/posAuthMiddleware.js';
+import protectEither from '../middleware/protectEither.js';
 import checkObjectId from '../middleware/checkObjectId.js';
 
 router.route('/').get(getProducts).post(protect, admin, createProduct);
@@ -49,6 +51,8 @@ router.route('/:productId/details/:id/financials').post(protect,checkObjectId,cr
 router
   .route('/:productId/details/:id/financials/:financialId')
   .get(checkObjectId, getFinancialDetails);
+router.put('/stock/:id', protectEither, updateStockById);
+
 
   
   
