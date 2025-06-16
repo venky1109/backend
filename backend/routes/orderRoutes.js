@@ -54,7 +54,7 @@ router.put('/pos/:id/mark-dispatched', posProtect, dispatchAgent, updateOrdersTo
 // Mark Order as Delivered
 router.put('/pos/:id/mark-delivered', posProtect, deliveryAgent, updateOrdersToDeliveredWithTimers);
 
-router.put('/pos/orders/:id/mark-paid', posProtect, deliveryAgent, updateOrdersToPaidWithTimers);
+router.put('/pos/:id/mark-paid', posProtect, deliveryAgent, updateOrdersToPaidWithTimers);
 
 
 //end of POS routes
