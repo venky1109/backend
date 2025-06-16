@@ -18,7 +18,8 @@ import {
   getOrdersToDeliverWithTimers,
   updateOrderToPackedWithTimers,
   updateOrdersToDispatchedWithTimers,
-  updateOrdersToDeliveredWithTimers
+  updateOrdersToDeliveredWithTimers,
+  updateOrdersToPaidWithTimers
 } from '../controllers/orderPOSController.js';
 import { protect, admin } from '../middleware/authMiddleware.js';
 // import { protectPOS } from '../middleware/posAuthMiddleware.js';
@@ -52,6 +53,9 @@ router.put('/pos/:id/mark-dispatched', posProtect, dispatchAgent, updateOrdersTo
 
 // Mark Order as Delivered
 router.put('/pos/:id/mark-delivered', posProtect, deliveryAgent, updateOrdersToDeliveredWithTimers);
+
+router.put('/pos/orders/:id/mark-paid', posProtect, deliveryAgent, updateOrdersToPaidWithTimers);
+
 
 //end of POS routes
 

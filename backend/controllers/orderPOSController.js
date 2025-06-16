@@ -184,8 +184,25 @@ const updateOrdersToDeliveredWithTimers = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+const updateOrdersToPaidWithTimers = async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+
+    if (order) {
+      order.isPaid = true;
+      order.paidAt = Date.now(); // Optional: track the time of payment
+      await order.save();
+      res.json(order);
+    } else {
+      res.status(404).json({ message: 'Order not found' });
+    }
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
 
 export { addOrderItemsPOS, getOrdersPOS , getOrderPOSItemsByOrderId , getAllOrdersWithTimers,
   getOrdersToPackWithTimers,
   getOrdersToDispatchWithTimers,
-  getOrdersToDeliverWithTimers,updateOrderToPackedWithTimers,updateOrdersToDeliveredWithTimers,updateOrdersToDispatchedWithTimers};
+  getOrdersToDeliverWithTimers,updateOrderToPackedWithTimers,updateOrdersToDeliveredWithTimers,updateOrdersToDispatchedWithTimers,updateOrdersToPaidWithTimers};
