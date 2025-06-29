@@ -30,6 +30,7 @@ const io = new Server(server, {
   cors: {
     origin: [
       'https://manakiranaonline.onrender.com',
+      'https://manakirana-988b3.web.app',
       'https://manakirana.online',
       'https://etrug.app',
       'http://192.168.1.6:3000',
@@ -58,6 +59,7 @@ app.set('trust proxy', 1);
 // CORS configuration
 const allowedOrigins = [
   'https://manakiranaonline.onrender.com',
+  'https://manakirana-988b3.web.app',
   'https://manakirana.online',
   'https://etrug.app',
   'http://192.168.1.6:3000',
