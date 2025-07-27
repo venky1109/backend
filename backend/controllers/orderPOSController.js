@@ -73,7 +73,7 @@ const dbOrderItems = orderItems.map((item) => {
 const getOrdersPOS = asyncHandler(async (req, res) => {
   const orders = await Order.find({})
     .sort({ createdAt: -1 })
-    .limit(20)
+    .limit(5)
     .populate('user', '_id name phoneNo');
 //   console.log(orders);
     res.json(orders);

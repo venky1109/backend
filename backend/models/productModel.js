@@ -11,6 +11,7 @@ const financialSchema = new mongoose.Schema({
   rating: { type: Number },
   numReviews: { type: Number },
   units: { type: String, required: true }, 
+  barcode: { type: [String], default: [] },
 });
 
 // Define a schema for the image details

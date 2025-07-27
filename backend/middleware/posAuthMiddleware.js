@@ -43,6 +43,16 @@ export const isAdminOrProp = (req, res, next) => {
   }
   return res.status(403).json({ message: 'Admin or Proprietor access required' });
 };
+
+// ✅ Optional role check middleware
+export const isAdminOrInventory = (req, res, next) => {
+  const { user } = req;
+  if (user && ['ADMIN', 'INVENTORY'].includes(user.role)) {
+    return next();
+  }
+  return res.status(403).json({ message: 'Admin or Proprietor access required' });
+};
+
 export const cashierOrAdmin = (req, res, next) => {
   const allowedRoles = ['CASHIER', 'ONLINE_CASHIER', 'HYBRID_CASHIER', 'ADMIN'];
 
@@ -51,6 +61,13 @@ export const cashierOrAdmin = (req, res, next) => {
   }
 
 };
+export const allowAllRoles = (req, res, next) => {
+  if (req.user && req.user.role) {
+    return next(); // All authenticated users with a role are allowed
+  }
+  return res.status(403).json({ message: 'Access denied: role missing or unauthorized' });
+};
+
 
 export const admin = (req, res, next) => {
   if (req.user && req.user.role === 'ADMIN') {

@@ -12,7 +12,7 @@ import uploadRoutes from './routes/uploadRoutes.js';
 import promotionRoutes from './routes/promotionRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import PosUserRoutes from './routes/posUserRoutes.js';
-
+import posProductRoutes from './routes/posProductRoutes.js';
 
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 import { Server } from 'socket.io';
@@ -40,6 +40,8 @@ const io = new Server(server, {
       'https://www.etrug.app',
       'https://smartgatewayuat.hdfcbank.com', // Juspay's Sandbox Gateway
       'https://smartgateway.hdfcbank.com', // Juspay's Production Gateway
+      'https://manakirana-988b3.firebaseapp.com/',
+      'https://pos-manakirana.firebaseapp.com'
     ],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
@@ -69,6 +71,8 @@ const allowedOrigins = [
   'https://www.etrug.app',
   'https://smartgatewayuat.hdfcbank.com', // Juspay's Sandbox Gateway
   'https://smartgateway.hdfcbank.com', // Juspay's Production Gateway
+  'https://manakirana-988b3.firebaseapp.com',
+     'https://pos-manakirana.firebaseapp.com'
 ];
 
 
@@ -78,7 +82,7 @@ app.use((req, res, next) => {
   // Content Security Policy to control sources for content
   res.setHeader(
     'Content-Security-Policy',
-    "frame-ancestors 'self' https://manakirana.com https://manakirana.online https://etrug.app https://smartgatewayuat.hdfcbank.com https://smartgateway.hdfcbank.com ;"
+    "frame-ancestors 'self' https://manakirana.com https://pos-manakirana.firebaseapp.com https://manakirana-988b3.firebaseapp.com https://manakirana.online https://etrug.app https://smartgatewayuat.hdfcbank.com https://smartgateway.hdfcbank.com ;"
   );
 
   // Enforce HTTPS with HSTS
@@ -123,7 +127,7 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/promotions', promotionRoutes);
 app.use('/api/payments', paymentRoutes);
-
+app.use('/api/pos-products', posProductRoutes);
 
 
 app.get('/api/config/paypal', (req, res) =>
