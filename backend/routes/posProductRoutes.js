@@ -17,6 +17,7 @@ router.use(protectPOS);
 router.post('/create-from-catalog', isAdminOrInventory, createPOSProductFromCatalog);
 router.post('/add-financial', isAdminOrInventory, addFinancialToPOSProduct);
 router.put('/update-financial', isAdminOrInventory, updatePOSProductFinancial);
-router.get('/barcode/:barcode', protectPOS, allowAllRoles, getPOSProductByBarcode);
+// router.get('/barcode/:barcode', protectPOS, allowAllRoles, getPOSProductByBarcode);
+router.get('/barcode/:barcode', getPOSProductByBarcode);
 
 export default router;
