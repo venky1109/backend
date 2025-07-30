@@ -118,7 +118,36 @@ export const initiatePayment = async (req, res) => {
         const productIds = cartItems.map((item) => item.productId);
         const dbProducts = await Product.find({ _id: { $in: productIds } });
 
-        if (!dbProducts || dbProducts.length !== cartItems.length) {
+        const financialIds = cartItems.map((item) => item.financialId);
+
+
+const matchedProducts = await Product.find({
+  'details.financials._id': { $in: financialIds }
+});
+
+let matchCount = 0;
+
+// Count how many individual `financialId` entries actually matched
+financialIds.forEach(fid => {
+  matchedProducts.forEach(product => {
+    product.details.forEach(detail => {
+      if (detail.financials) {
+        detail.financials.forEach(fin => {
+          if (String(fin._id) === String(fid)) {
+            matchCount++;
+          }
+        });
+      }
+    });
+  });
+});
+
+// console.log("Matched financial count:", matchCount);
+
+        // console.log(financialIds)
+        // console.log(matchedProducts)
+        // console.log(financialIds.length,matchCount)
+        if (!dbProducts || matchCount !== cartItems.length) {
             return res.status(400).json({
                 success: false,
                 message: 'Invalid cart items. Please verify your cart.',
