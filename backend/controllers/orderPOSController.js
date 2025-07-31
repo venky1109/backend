@@ -52,6 +52,7 @@ const dbOrderItems = orderItems.map((item) => {
 
   const { itemsPrice, shippingPrice, totalPrice } = calcPrices(dbOrderItems);
    const source = 'CASHIER';
+   const isPaid = paymentMethod === 'CASH';
   const order = new Order({
     orderItems: dbOrderItems,
     user,
@@ -62,6 +63,8 @@ const dbOrderItems = orderItems.map((item) => {
     totalPrice,
     orderId,
     source,
+    isPaid, // Add this field
+    paidAt: isPaid ? Date.now() : null, // Optionally set paidAt if paid
   });
 
   const createdOrder = await order.save();
