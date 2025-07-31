@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import asyncHandler from './asyncHandler.js';
 import User from '../models/userModel.js';
+import PosUser from '../models/PosUserModel.js'; 
 
 // Middleware: protectEither (works for POS or regular)
 const protectEither = asyncHandler(async (req, res, next) => {
@@ -25,12 +26,17 @@ const protectEither = asyncHandler(async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).select('-password');
 
-    if (!user) {
-      res.status(401);
-      throw new Error('User not found');
-    }
+
+    let user = await User.findById(decoded.id).select('-password');
+
+if (!user) {
+  user = await PosUser.findById(decoded.id).select('-password');
+  if (!user) {
+    res.status(401);
+    throw new Error('User not found in either collection');
+  }
+}
 
     req.user = user;
     next();

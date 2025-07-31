@@ -80,6 +80,6 @@ posUserSchema.pre('save', async function (next) {
   this.password = await bcrypt.hash(this.password, salt);
 });
 
-const PosUser = mongoose.model('PosUser', posUserSchema);
-
+const PosUser = mongoose.models.PosUser || mongoose.model('PosUser', posUserSchema);
 export default PosUser;
+
