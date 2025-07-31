@@ -307,7 +307,7 @@ export const handlePaymentResponse = async (req, res) => {
             // redirectUrl = new URL(`/payment/success?orderId=${orderId}`, process.env.FRONTEND_URL).toString();
             // redirectUrl = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
             if (order?.source !== 'ONLINE') {
-    redirectUrl = `https://pos.manakirana.com/`; // or your POS app's home screen
+    redirectUrl = `https://pos-manakirana.firebaseapp.com/`; // or your POS app's home screen
   } else {
     redirectUrl = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
   }
