@@ -305,7 +305,14 @@ export const handlePaymentResponse = async (req, res) => {
             // console.log(`Order ID ${orderId} marked as paid successfully.`);
             // redirectUrl = `${process.env.FRONTEND_URL}/payment/success?orderId=${orderId}`;
             // redirectUrl = new URL(`/payment/success?orderId=${orderId}`, process.env.FRONTEND_URL).toString();
-            redirectUrl = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
+            // redirectUrl = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
+            if (order?.source !== 'ONLINE') {
+    redirectUrl = `https://pos.manakirana.com/`; // or your POS app's home screen
+  } else {
+    redirectUrl = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
+  }
+
+            
 
         } else {
             console.error(`Payment for Order ID ${orderId} is not successful. Status: ${orderStatus}`);
