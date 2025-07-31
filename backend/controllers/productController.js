@@ -547,7 +547,7 @@ const updateStockById = asyncHandler(async (req, res) => {
   const { brandID, financialID, newQuantity } = req.body;
   const { id: productId } = req.params;
 
-  console.log('🛠️ Updating stock for:', { productId, brandID, financialID, newQuantity });
+  // console.log('🛠️ Updating stock for:', { productId, brandID, financialID, newQuantity });
 
   if (!brandID || !financialID || typeof newQuantity !== 'number') {
     res.status(400);

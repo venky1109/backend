@@ -52,7 +52,7 @@ const dbOrderItems = orderItems.map((item) => {
 
   const { itemsPrice, shippingPrice, totalPrice } = calcPrices(dbOrderItems);
    const source = 'CASHIER';
-   const isPaid = paymentMethod === 'CASH';
+   const isPaid = paymentMethod?.toUpperCase() === 'CASH';
   const order = new Order({
     orderItems: dbOrderItems,
     user,
