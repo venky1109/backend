@@ -287,7 +287,11 @@ export const handlePaymentResponse = async (req, res) => {
         let redirectUrl = `https://www.manakirana.com/payment/failure`;
         // let redirectUrl = new URL(`/payment/failure`, process.env.FRONTEND_URL).toString();
 
-
+                    if (order?.source !== 'ONLINE') {
+    redirectUrl = `https://pos-manakirana.firebaseapp.com/`; // or your POS app's home screen
+  } else {
+    redirectUrl = `https://www.manakirana.com/payment/failure`;
+  }
 
         // Update the order status if the payment is successful
         if (orderStatus === 'CHARGED') {
