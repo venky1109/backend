@@ -53,6 +53,15 @@ const posUserSchema = mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    location: {
+      type: String,
+      required: false,
+      default: '',
+    },
+    balance: {
+      type: Number,
+      default: 0, // 💰 initial balance is 0
+    },
   },
   { timestamps: true }
 );
