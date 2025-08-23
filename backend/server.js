@@ -33,15 +33,16 @@ const io = new Server(server, {
       'https://manakirana-988b3.web.app',
       'https://manakirana.online',
       'https://etrug.app',
-      'http://192.168.1.6:3000',
-      'http://localhost:3000',
-      'http://localhost:3001',
+      // 'http://192.168.1.6:3000',
+      // 'http://localhost:3000',
+      // 'http://localhost:3001',
       'https://manakirana.com',
       'https://www.etrug.app',
       'https://smartgatewayuat.hdfcbank.com', // Juspay's Sandbox Gateway
       'https://smartgateway.hdfcbank.com', // Juspay's Production Gateway
       'https://manakirana-988b3.firebaseapp.com/',
-      'https://pos-manakirana.firebaseapp.com'
+      'https://pos-manakirana.firebaseapp.com',
+      'https://pos-manakirana.web.app'
     ],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
@@ -64,14 +65,15 @@ const allowedOrigins = [
   'https://manakirana-988b3.web.app',
   'https://manakirana.online',
   'https://etrug.app',
-  'http://192.168.1.6:3000',
-  'http://localhost:3000',
-  'http://localhost:3001',
+  // 'http://192.168.1.6:3000',
+  // 'http://localhost:3000',
+  // 'http://localhost:3001',
   'https://manakirana.com',
   'https://www.etrug.app',
   'https://smartgatewayuat.hdfcbank.com', // Juspay's Sandbox Gateway
   'https://smartgateway.hdfcbank.com', // Juspay's Production Gateway
   'https://manakirana-988b3.firebaseapp.com',
+  'https://pos-manakirana.web.app',
      'https://pos-manakirana.firebaseapp.com'
 ];
 
