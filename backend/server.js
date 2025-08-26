@@ -34,8 +34,8 @@ const io = new Server(server, {
       'https://manakirana.online',
       'https://etrug.app',
       // 'http://192.168.1.6:3000',
-      // 'http://localhost:3000',
-      // 'http://localhost:3001',
+      'http://localhost:3000',
+      'http://localhost:3001',
       'https://manakirana.com',
       'https://www.etrug.app',
       'https://smartgatewayuat.hdfcbank.com', // Juspay's Sandbox Gateway
@@ -66,8 +66,8 @@ const allowedOrigins = [
   'https://manakirana.online',
   'https://etrug.app',
   // 'http://192.168.1.6:3000',
-  // 'http://localhost:3000',
-  // 'http://localhost:3001',
+  'http://localhost:3000',
+  'http://localhost:3001',
   'https://manakirana.com',
   'https://www.etrug.app',
   'https://smartgatewayuat.hdfcbank.com', // Juspay's Sandbox Gateway
