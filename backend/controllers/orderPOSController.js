@@ -127,7 +127,7 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
     return res.json(shaped);
   }
 
-  let limit = 50;
+  let limit = 50000;
   if (mode === 'latest' || !mode) {
     limit = 10;
   }
