@@ -10,6 +10,8 @@ const calcPrices = (items) => {
   return { itemsPrice, shippingPrice, totalPrice };
 };
 
+
+
 // ➕ Create POS Order
 const addOrderItemsPOS = asyncHandler(async (req, res) => {
   const { orderItems, shippingAddress, paymentMethod, user, orderId } = req.body;
@@ -71,7 +73,107 @@ const dbOrderItems = orderItems.map((item) => {
   res.status(201).json(createdOrder);
 });
 
+// Get POS orders with filters:
+// mode = latest | today | custom | phone
+const getFilteredPOSOrders = asyncHandler(async (req, res) => {
+  const { mode, phone, from, to } = req.query;
 
+  let query = {};
+  const now = new Date();
+
+  if (mode === 'today') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    query.createdAt = { $gte: start, $lte: end };
+  }
+
+  if (mode === 'custom') {
+    if (!from || !to) {
+      res.status(400);
+      throw new Error('from and to dates are required for custom filter');
+    }
+
+    const start = new Date(from);
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date(to);
+    end.setHours(23, 59, 59, 999);
+
+    query.createdAt = { $gte: start, $lte: end };
+  }
+
+  if (mode === 'phone') {
+    if (!phone) {
+      res.status(400);
+      throw new Error('phone number is required');
+    }
+
+    const orders = await Order.find({})
+      .sort({ createdAt: -1 })
+      .populate('user', '_id name phoneNo');
+
+    const filtered = orders.filter(
+      (order) => String(order?.user?.phoneNo || '') === String(phone)
+    );
+
+    const shaped = filtered.map((order) => ({
+      _id: order._id,
+      createdAt: order.createdAt,
+      orderId: order.orderId,
+      phoneNo: order?.user?.phoneNo || '',
+      totalPrice: order.totalPrice || 0,
+    }));
+
+    return res.json(shaped);
+  }
+
+  let limit = 50;
+  if (mode === 'latest' || !mode) {
+    limit = 10;
+  }
+
+  const orders = await Order.find(query)
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .populate('user', '_id name phoneNo');
+
+  const shaped = orders.map((order) => ({
+    _id: order._id,
+    createdAt: order.createdAt,
+    orderId: order.orderId,
+    phoneNo: order?.user?.phoneNo || '',
+    totalPrice: order.totalPrice || 0,
+  }));
+
+  res.json(shaped);
+});
+
+// Get one order details with products for popup/details table
+const getPOSOrderDetails = asyncHandler(async (req, res) => {
+  const order = await Order.findById(req.params.id).populate('user', '_id name phoneNo');
+
+  if (!order) {
+    res.status(404);
+    throw new Error('Order not found');
+  }
+
+  const items = (order.orderItems || []).map((item, index) => ({
+    sNo: index + 1,
+    item: item.name || '',
+    weight: `${item.quantity || ''} ${item.units || ''}`.trim(),
+    qty: item.qty || 0,
+    pricePerQty: item.price || 0,
+    amount: (item.qty || 0) * (item.price || 0),
+  }));
+
+  res.json({
+    _id: order._id,
+    orderId: order.orderId,
+    phoneNo: order?.user?.phoneNo || '',
+    totalPrice: order.totalPrice || 0,
+    items,
+  });
+});
 // 📦 POS: Get All Orders (latest first, limited, populated)
 const getOrdersPOS = asyncHandler(async (req, res) => {
   const orders = await Order.find({})
@@ -208,4 +310,4 @@ const updateOrdersToPaidWithTimers = async (req, res) => {
 export { addOrderItemsPOS, getOrdersPOS , getOrderPOSItemsByOrderId , getAllOrdersWithTimers,
   getOrdersToPackWithTimers,
   getOrdersToDispatchWithTimers,
-  getOrdersToDeliverWithTimers,updateOrderToPackedWithTimers,updateOrdersToDeliveredWithTimers,updateOrdersToDispatchedWithTimers,updateOrdersToPaidWithTimers};
+  getOrdersToDeliverWithTimers,updateOrderToPackedWithTimers,updateOrdersToDeliveredWithTimers,updateOrdersToDispatchedWithTimers,updateOrdersToPaidWithTimers,getFilteredPOSOrders,getPOSOrderDetails};
