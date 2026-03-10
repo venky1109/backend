@@ -47,18 +47,13 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error('No order items provided');
   }
-//ppp
-  // if (MK_order_id === undefined || MK_order_id === null) {
-  //   res.status(400);
-  //   throw new Error('MK_order_id is required for POS orders');
-  // }
 
-  // const numericMkOrderId = Number(MK_order_id);
-  let numericMkOrderId = null;
+  if (MK_order_id === undefined || MK_order_id === null) {
+    res.status(400);
+    throw new Error('MK_order_id is required for POS orders');
+  }
 
-if (MK_order_id !== undefined && MK_order_id !== null && MK_order_id !== '') {
-  numericMkOrderId = Number(MK_order_id);
-
+  const numericMkOrderId = Number(MK_order_id);
   if (!Number.isFinite(numericMkOrderId)) {
     res.status(400);
     throw new Error('MK_order_id must be a valid number');
@@ -68,17 +63,6 @@ if (MK_order_id !== undefined && MK_order_id !== null && MK_order_id !== '') {
   if (existingOrder) {
     return res.status(200).json(existingOrder);
   }
-}
-//ppp
-  // if (!Number.isFinite(numericMkOrderId)) {
-  //   res.status(400);
-  //   throw new Error('MK_order_id must be a valid number');
-  // }
-
-  // const existingOrder = await Order.findOne({ MK_order_id: numericMkOrderId });
-  // if (existingOrder) {
-  //   return res.status(200).json(existingOrder);
-  // }
 
   const productIds = orderItems.map((x) => x.productId);
   if (productIds.some((id) => !id || id.includes('-'))) {
@@ -124,7 +108,6 @@ if (MK_order_id !== undefined && MK_order_id !== null && MK_order_id !== '') {
       shippingPrice,
       totalPrice,
       orderId,
-      // MK_order_id: numericMkOrderId,//ppp
       MK_order_id: numericMkOrderId,
       source,
       isPaid,
