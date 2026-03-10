@@ -39,7 +39,7 @@ const getCustomerByPhoneNoPOS = asyncHandler(async (req, res) => {
 
 const createCustomerPOS = asyncHandler(async (req, res) => {
   const { name, phone, deliveryAddress = {}, location = {} } = req.body;
-  console.log(req.body);
+  // console.log(req.body);
 
   if (!phone || !name) {
     res.status(400);
