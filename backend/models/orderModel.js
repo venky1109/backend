@@ -23,24 +23,23 @@ const orderSchema = mongoose.Schema(
         },
       },
     ],
- 
 
     shippingAddress: {
-  street: { type: String, required: true },
-  city: { type: String, required: true },
-  postalCode: { type: String, required: true },
-  country: { type: String },
-  location: {
-    type: {
-      type: String,
-      enum: ['Point'],
-      default: 'Point',
+      street: { type: String, required: true },
+      city: { type: String, required: true },
+      postalCode: { type: String, required: true },
+      country: { type: String },
+      location: {
+        type: {
+          type: String,
+          enum: ['Point'],
+          default: 'Point',
+        },
+        coordinates: {
+          type: [Number],
+        },
+      },
     },
-    coordinates: {
-      type: [Number], // [longitude, latitude]
-    },
-  },
-},
 
     paymentMethod: {
       type: String,
@@ -91,17 +90,22 @@ const orderSchema = mongoose.Schema(
       default: false,
     },
 
-packedAt: { type: Date },
+    packedAt: { type: Date },
+    dispatchedAt: { type: Date },
+    deliveredAt: { type: Date },
 
-
-dispatchedAt: { type: Date },
-
-deliveredAt: { type: Date },
     orderId: {
       type: String,
+      index: true,
     },
 
-    // ✅ Add this block:
+    MK_order_id: {
+      type: Number,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
+
     source: {
       type: String,
       enum: ['CASHIER', 'ONLINE'],
