@@ -103,7 +103,7 @@ const orderSchema = mongoose.Schema(
       type: Number,
       unique: true,
       sparse: true,
-      index: true,  
+      index: true,
     },
 
     source: {
@@ -111,6 +111,18 @@ const orderSchema = mongoose.Schema(
       enum: ['CASHIER', 'ONLINE'],
       required: true,
       default: 'ONLINE',
+    },
+
+    // NEW OPTIONAL POS FIELDS
+    posUserName: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    posLocation: {
+      type: String,
+      trim: true,
+      default: null,
     },
   },
   {

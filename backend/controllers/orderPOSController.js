@@ -1,6 +1,8 @@
 import asyncHandler from '../middleware/asyncHandler.js';
+import mongoose from 'mongoose';
 import Order from '../models/orderModel.js';
 import Product from '../models/productModel.js';
+import User from '../models/userModel.js';
 
 // Utility to calculate order prices
 const calcPrices = (items) => {
@@ -9,8 +11,6 @@ const calcPrices = (items) => {
   const totalPrice = itemsPrice + shippingPrice;
   return { itemsPrice, shippingPrice, totalPrice };
 };
-
-import mongoose from 'mongoose';
 
 const buildOrderLookup = (idOrMk) => {
   const trimmed = String(idOrMk).trim();
@@ -25,14 +25,84 @@ const buildOrderLookup = (idOrMk) => {
     or.push({ MK_order_id: asNum });
   }
 
-  if (!or.length) {
-    return null;
-  }
+  if (!or.length) return null;
 
   return { $or: or };
 };
 
-// ➕ Create POS Order
+// ------------------------------------
+// Access filters
+// ------------------------------------
+
+// POS orders => source: CASHIER
+// CASHIER => only own orders in own location
+// MANAGER => all POS orders in own location
+// ADMIN => all POS orders in all locations, including null
+const buildPOSAccessFilter = (loggedInUser) => {
+  const base = { source: 'CASHIER' };
+
+  if (!loggedInUser) return base;
+
+  const role = String(loggedInUser.role || '').toUpperCase();
+  const username = loggedInUser.username || null;
+  const location = loggedInUser.location || null;
+
+  if (role === 'CASHIER') {
+    return {
+      ...base,
+      posUserName: username,
+      posLocation: location,
+    };
+  }
+
+  if (role === 'MANAGER') {
+    return {
+      ...base,
+      posLocation: location,
+    };
+  }
+
+  if (role === 'ADMIN') {
+    return base;
+  }
+
+  return base;
+};
+
+// ONLINE orders => source: ONLINE
+// Example access:
+// CASHIER => no online orders
+// MANAGER => online orders for own location only, if mapped by city
+// ADMIN => all online orders
+const buildOnlineAccessFilter = (loggedInUser) => {
+  const base = { source: 'ONLINE' };
+
+  if (!loggedInUser) return base;
+
+  const role = String(loggedInUser.role || '').toUpperCase();
+  const location = loggedInUser.location || null;
+
+  if (role === 'CASHIER') {
+    return { _id: null }; // deny
+  }
+
+  if (role === 'MANAGER') {
+    return {
+      ...base,
+      'shippingAddress.city': location,
+    };
+  }
+
+  if (role === 'ADMIN') {
+    return base;
+  }
+
+  return base;
+};
+
+// ------------------------------------
+// POS: Create Order
+// ------------------------------------
 const addOrderItemsPOS = asyncHandler(async (req, res) => {
   const {
     orderItems,
@@ -41,6 +111,8 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
     user,
     orderId,
     MK_order_id,
+    posUserName,
+    posLocation,
   } = req.body;
 
   if (!orderItems?.length) {
@@ -98,6 +170,17 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
   const source = 'CASHIER';
   const isPaid = paymentMethod?.toUpperCase() === 'CASH';
 
+  let resolvedPosUserName = posUserName || null;
+  let resolvedPosLocation = posLocation || null;
+
+  if (user && mongoose.Types.ObjectId.isValid(user)) {
+    const posUser = await User.findById(user).select('username location');
+    if (posUser) {
+      resolvedPosUserName = resolvedPosUserName || posUser.username || null;
+      resolvedPosLocation = resolvedPosLocation || posUser.location || null;
+    }
+  }
+
   try {
     const createdOrder = await Order.create({
       orderItems: dbOrderItems,
@@ -112,6 +195,8 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
       source,
       isPaid,
       paidAt: isPaid ? Date.now() : null,
+      posUserName: resolvedPosUserName,
+      posLocation: resolvedPosLocation,
     });
 
     return res.status(201).json(createdOrder);
@@ -125,12 +210,15 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
     throw err;
   }
 });
-// Get POS orders with filters:
+
+// ------------------------------------
+// POS: Search / Filter Orders
 // mode = latest | today | custom | phone
+// ------------------------------------
 const getFilteredPOSOrders = asyncHandler(async (req, res) => {
   const { mode, phone, from, to } = req.query;
 
-  let query = { source: 'CASHIER' };
+  let query = buildPOSAccessFilter(req.user);
   const now = new Date();
 
   if (mode === 'today') {
@@ -160,7 +248,7 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
       throw new Error('phone number is required');
     }
 
-    const orders = await Order.find({ source: 'CASHIER' })
+    const orders = await Order.find(query)
       .sort({ createdAt: -1 })
       .populate('user', '_id name phoneNo');
 
@@ -175,6 +263,9 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
       orderId: order.orderId,
       phoneNo: order?.user?.phoneNo || '',
       totalPrice: order.totalPrice || 0,
+      posUserName: order.posUserName || '',
+      posLocation: order.posLocation || '',
+      source: order.source || '',
     }));
 
     return res.json(shaped);
@@ -197,12 +288,17 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
     orderId: order.orderId,
     phoneNo: order?.user?.phoneNo || '',
     totalPrice: order.totalPrice || 0,
+    posUserName: order.posUserName || '',
+    posLocation: order.posLocation || '',
+    source: order.source || '',
   }));
 
   res.json(shaped);
 });
 
-// Get one order details with products for popup/details table
+// ------------------------------------
+// POS: Order Details
+// ------------------------------------
 const getPOSOrderDetails = asyncHandler(async (req, res) => {
   const filter = buildOrderLookup(req.params.id);
 
@@ -211,7 +307,12 @@ const getPOSOrderDetails = asyncHandler(async (req, res) => {
     throw new Error('Invalid order identifier');
   }
 
-  const order = await Order.findOne(filter).populate('user', '_id name phoneNo');
+  const accessFilter = buildPOSAccessFilter(req.user);
+
+  const order = await Order.findOne({
+    ...accessFilter,
+    ...filter,
+  }).populate('user', '_id name phoneNo');
 
   if (!order) {
     res.status(404);
@@ -233,12 +334,20 @@ const getPOSOrderDetails = asyncHandler(async (req, res) => {
     orderId: order.orderId,
     phoneNo: order?.user?.phoneNo || '',
     totalPrice: order.totalPrice || 0,
+    posUserName: order.posUserName || '',
+    posLocation: order.posLocation || '',
+    source: order.source || '',
     items,
   });
 });
-// 📦 POS: Get All Orders (latest first, limited, populated)
+
+// ------------------------------------
+// POS: Get Latest Orders
+// ------------------------------------
 const getOrdersPOS = asyncHandler(async (req, res) => {
-  const orders = await Order.find({ source: 'CASHIER' })
+  const query = buildPOSAccessFilter(req.user);
+
+  const orders = await Order.find(query)
     .sort({ createdAt: -1 })
     .limit(50)
     .populate('user', '_id name phoneNo');
@@ -246,6 +355,9 @@ const getOrdersPOS = asyncHandler(async (req, res) => {
   res.json(orders);
 });
 
+// ------------------------------------
+// POS: Get Order Items by Order ID / MK ID
+// ------------------------------------
 const getOrderPOSItemsByOrderId = asyncHandler(async (req, res) => {
   const filter = buildOrderLookup(req.params.id);
 
@@ -254,7 +366,12 @@ const getOrderPOSItemsByOrderId = asyncHandler(async (req, res) => {
     throw new Error('Invalid order identifier');
   }
 
-  const order = await Order.findOne(filter);
+  const accessFilter = buildPOSAccessFilter(req.user);
+
+  const order = await Order.findOne({
+    ...accessFilter,
+    ...filter,
+  });
 
   if (order) {
     res.json(order.orderItems || []);
@@ -263,67 +380,119 @@ const getOrderPOSItemsByOrderId = asyncHandler(async (req, res) => {
     throw new Error('Order not found');
   }
 });
+
+// ------------------------------------
+// POS: All Orders with Timers
+// ------------------------------------
 const getAllOrdersWithTimers = asyncHandler(async (req, res) => {
-  const orders = await Order.find({ source: 'CASHIER' })
+  const query = buildPOSAccessFilter(req.user);
+
+  const orders = await Order.find(query)
     .sort({ createdAt: -1 })
     .populate('user', '_id name phoneNo');
 
-  const enriched = orders.map(order => ({
+  const enriched = orders.map((order) => ({
     ...order.toObject(),
-    packingTimer: order.packingStartedAt ? Date.now() - new Date(order.packingStartedAt).getTime() : null,
-    dispatchTimer: order.dispatchStartedAt ? Date.now() - new Date(order.dispatchStartedAt).getTime() : null,
-    deliveryTimer: order.deliveryStartedAt ? Date.now() - new Date(order.deliveryStartedAt).getTime() : null,
+    packingTimer: order.packingStartedAt
+      ? Date.now() - new Date(order.packingStartedAt).getTime()
+      : null,
+    dispatchTimer: order.dispatchStartedAt
+      ? Date.now() - new Date(order.dispatchStartedAt).getTime()
+      : null,
+    deliveryTimer: order.deliveryStartedAt
+      ? Date.now() - new Date(order.deliveryStartedAt).getTime()
+      : null,
   }));
 
   res.json(enriched);
 });
 
+// ------------------------------------
+// POS: Orders To Pack
+// ------------------------------------
 const getOrdersToPackWithTimers = asyncHandler(async (req, res) => {
-  const orders = await Order.find({ source: 'CASHIER', isPacked: false })
+  const query = {
+    ...buildPOSAccessFilter(req.user),
+    isPacked: false,
+  };
+
+  const orders = await Order.find(query)
     .sort({ createdAt: -1 })
     .populate('user', '_id name phoneNo');
 
-  const enriched = orders.map(order => ({
+  const enriched = orders.map((order) => ({
     ...order.toObject(),
-    packingTimer: order.packingStartedAt ? Date.now() - new Date(order.packingStartedAt).getTime() : null,
+    packingTimer: order.packingStartedAt
+      ? Date.now() - new Date(order.packingStartedAt).getTime()
+      : null,
   }));
 
   res.json(enriched);
 });
 
+// ------------------------------------
+// POS: Orders To Dispatch
+// ------------------------------------
 const getOrdersToDispatchWithTimers = asyncHandler(async (req, res) => {
-  const orders = await Order.find({ source: 'CASHIER', isPacked: true, isDispatched: false })
+  const query = {
+    ...buildPOSAccessFilter(req.user),
+    isPacked: true,
+    isDispatched: false,
+  };
+
+  const orders = await Order.find(query)
     .sort({ createdAt: -1 })
     .populate('user', '_id name phoneNo');
 
-  const enriched = orders.map(order => ({
+  const enriched = orders.map((order) => ({
     ...order.toObject(),
-    dispatchTimer: order.dispatchStartedAt ? Date.now() - new Date(order.dispatchStartedAt).getTime() : null,
+    dispatchTimer: order.dispatchStartedAt
+      ? Date.now() - new Date(order.dispatchStartedAt).getTime()
+      : null,
   }));
 
   res.json(enriched);
 });
 
+// ------------------------------------
+// POS: Orders To Deliver
+// ------------------------------------
 const getOrdersToDeliverWithTimers = asyncHandler(async (req, res) => {
-  const orders = await Order.find({ source: 'CASHIER', isDispatched: true, isDelivered: false })
+  const query = {
+    ...buildPOSAccessFilter(req.user),
+    isDispatched: true,
+    isDelivered: false,
+  };
+
+  const orders = await Order.find(query)
     .sort({ createdAt: -1 })
     .populate('user', '_id name phoneNo');
 
-  const enriched = orders.map(order => ({
+  const enriched = orders.map((order) => ({
     ...order.toObject(),
-    deliveryTimer: order.deliveryStartedAt ? Date.now() - new Date(order.deliveryStartedAt).getTime() : null,
+    deliveryTimer: order.deliveryStartedAt
+      ? Date.now() - new Date(order.deliveryStartedAt).getTime()
+      : null,
   }));
 
   res.json(enriched);
 });
 
-
+// ------------------------------------
+// POS: Mark Packed
+// ------------------------------------
 const updateOrderToPackedWithTimers = async (req, res) => {
   try {
     const filter = buildOrderLookup(req.params.id);
     if (!filter) return res.status(400).json({ message: 'Invalid order identifier' });
 
-    const order = await Order.findOne(filter);
+    const accessFilter = buildPOSAccessFilter(req.user);
+
+    const order = await Order.findOne({
+      ...accessFilter,
+      ...filter,
+    });
+
     if (order) {
       order.isPacked = true;
       order.packedAt = Date.now();
@@ -337,12 +506,21 @@ const updateOrderToPackedWithTimers = async (req, res) => {
   }
 };
 
+// ------------------------------------
+// POS: Mark Dispatched
+// ------------------------------------
 const updateOrdersToDispatchedWithTimers = async (req, res) => {
   try {
     const filter = buildOrderLookup(req.params.id);
     if (!filter) return res.status(400).json({ message: 'Invalid order identifier' });
 
-    const order = await Order.findOne(filter);
+    const accessFilter = buildPOSAccessFilter(req.user);
+
+    const order = await Order.findOne({
+      ...accessFilter,
+      ...filter,
+    });
+
     if (order) {
       order.isDispatched = true;
       order.dispatchedAt = Date.now();
@@ -356,12 +534,21 @@ const updateOrdersToDispatchedWithTimers = async (req, res) => {
   }
 };
 
+// ------------------------------------
+// POS: Mark Delivered
+// ------------------------------------
 const updateOrdersToDeliveredWithTimers = async (req, res) => {
   try {
     const filter = buildOrderLookup(req.params.id);
     if (!filter) return res.status(400).json({ message: 'Invalid order identifier' });
 
-    const order = await Order.findOne(filter);
+    const accessFilter = buildPOSAccessFilter(req.user);
+
+    const order = await Order.findOne({
+      ...accessFilter,
+      ...filter,
+    });
+
     if (order) {
       order.isDelivered = true;
       order.deliveredAt = Date.now();
@@ -375,12 +562,21 @@ const updateOrdersToDeliveredWithTimers = async (req, res) => {
   }
 };
 
+// ------------------------------------
+// POS: Mark Paid
+// ------------------------------------
 const updateOrdersToPaidWithTimers = async (req, res) => {
   try {
     const filter = buildOrderLookup(req.params.id);
     if (!filter) return res.status(400).json({ message: 'Invalid order identifier' });
 
-    const order = await Order.findOne(filter);
+    const accessFilter = buildPOSAccessFilter(req.user);
+
+    const order = await Order.findOne({
+      ...accessFilter,
+      ...filter,
+    });
+
     if (order) {
       order.isPaid = true;
       order.paidAt = Date.now();
@@ -394,7 +590,59 @@ const updateOrdersToPaidWithTimers = async (req, res) => {
   }
 };
 
-export { addOrderItemsPOS, getOrdersPOS , getOrderPOSItemsByOrderId , getAllOrdersWithTimers,
+// ------------------------------------
+// ONLINE: Example list controller
+// ------------------------------------
+const getOnlineOrders = asyncHandler(async (req, res) => {
+  const query = buildOnlineAccessFilter(req.user);
+
+  const orders = await Order.find(query)
+    .sort({ createdAt: -1 })
+    .populate('user', '_id name phoneNo');
+
+  res.json(orders);
+});
+
+// ------------------------------------
+// ONLINE: Example details controller
+// ------------------------------------
+const getOnlineOrderDetails = asyncHandler(async (req, res) => {
+  const filter = buildOrderLookup(req.params.id);
+
+  if (!filter) {
+    res.status(400);
+    throw new Error('Invalid order identifier');
+  }
+
+  const accessFilter = buildOnlineAccessFilter(req.user);
+
+  const order = await Order.findOne({
+    ...accessFilter,
+    ...filter,
+  }).populate('user', '_id name phoneNo');
+
+  if (!order) {
+    res.status(404);
+    throw new Error('Order not found');
+  }
+
+  res.json(order);
+});
+
+export {
+  addOrderItemsPOS,
+  getOrdersPOS,
+  getOrderPOSItemsByOrderId,
+  getAllOrdersWithTimers,
   getOrdersToPackWithTimers,
   getOrdersToDispatchWithTimers,
-  getOrdersToDeliverWithTimers,updateOrderToPackedWithTimers,updateOrdersToDeliveredWithTimers,updateOrdersToDispatchedWithTimers,updateOrdersToPaidWithTimers,getFilteredPOSOrders,getPOSOrderDetails};
+  getOrdersToDeliverWithTimers,
+  updateOrderToPackedWithTimers,
+  updateOrdersToDeliveredWithTimers,
+  updateOrdersToDispatchedWithTimers,
+  updateOrdersToPaidWithTimers,
+  getFilteredPOSOrders,
+  getPOSOrderDetails,
+  getOnlineOrders,
+  getOnlineOrderDetails,
+};
