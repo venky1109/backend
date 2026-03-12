@@ -34,10 +34,9 @@ const buildOrderLookup = (idOrMk) => {
 // Access filters
 // ------------------------------------
 
-// POS orders => source: CASHIER
-// CASHIER => only own orders in own location
+// CASHIER => only own POS orders in own location
 // MANAGER => all POS orders in own location
-// ADMIN => all POS orders in all locations, including null
+// ADMIN => all orders, all sources, all locations, including null
 const buildPOSAccessFilter = (loggedInUser) => {
   const base = { source: 'CASHIER' };
 
@@ -63,17 +62,13 @@ const buildPOSAccessFilter = (loggedInUser) => {
   }
 
   if (role === 'ADMIN') {
-    return base;
+    return {}; // all orders including ONLINE
   }
 
   return base;
 };
 
-// ONLINE orders => source: ONLINE
-// Example access:
-// CASHIER => no online orders
-// MANAGER => online orders for own location only, if mapped by city
-// ADMIN => all online orders
+// ONLINE orders helper, kept separately if needed elsewhere
 const buildOnlineAccessFilter = (loggedInUser) => {
   const base = { source: 'ONLINE' };
 
@@ -83,7 +78,7 @@ const buildOnlineAccessFilter = (loggedInUser) => {
   const location = loggedInUser.location || null;
 
   if (role === 'CASHIER') {
-    return { _id: null }; // deny
+    return { _id: null };
   }
 
   if (role === 'MANAGER') {
@@ -168,7 +163,10 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
 
   const { itemsPrice, shippingPrice, totalPrice } = calcPrices(dbOrderItems);
   const source = 'CASHIER';
-  const isPaid = paymentMethod?.toUpperCase() === 'CASH';
+  const isPaid =
+    ['CASH', 'CASH OR UPI', 'UPI', 'CARD'].includes(
+      String(paymentMethod || '').toUpperCase()
+    );
 
   let resolvedPosUserName = posUserName || null;
   let resolvedPosLocation = posLocation || null;
@@ -212,7 +210,7 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
 });
 
 // ------------------------------------
-// POS: Search / Filter Orders
+// POS / ADMIN: Search / Filter Orders
 // mode = latest | today | custom | phone
 // ------------------------------------
 const getFilteredPOSOrders = asyncHandler(async (req, res) => {
@@ -297,7 +295,7 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
 });
 
 // ------------------------------------
-// POS: Order Details
+// POS / ADMIN: Order Details
 // ------------------------------------
 const getPOSOrderDetails = asyncHandler(async (req, res) => {
   const filter = buildOrderLookup(req.params.id);
@@ -331,6 +329,7 @@ const getPOSOrderDetails = asyncHandler(async (req, res) => {
   res.json({
     _id: order._id,
     MK_order_id: order.MK_order_id,
+    createdAt: order.createdAt,
     orderId: order.orderId,
     phoneNo: order?.user?.phoneNo || '',
     totalPrice: order.totalPrice || 0,
@@ -342,7 +341,7 @@ const getPOSOrderDetails = asyncHandler(async (req, res) => {
 });
 
 // ------------------------------------
-// POS: Get Latest Orders
+// POS / ADMIN: Get Latest Orders
 // ------------------------------------
 const getOrdersPOS = asyncHandler(async (req, res) => {
   const query = buildPOSAccessFilter(req.user);
@@ -356,7 +355,7 @@ const getOrdersPOS = asyncHandler(async (req, res) => {
 });
 
 // ------------------------------------
-// POS: Get Order Items by Order ID / MK ID
+// POS / ADMIN: Get Order Items by Order ID / MK ID
 // ------------------------------------
 const getOrderPOSItemsByOrderId = asyncHandler(async (req, res) => {
   const filter = buildOrderLookup(req.params.id);
@@ -382,7 +381,7 @@ const getOrderPOSItemsByOrderId = asyncHandler(async (req, res) => {
 });
 
 // ------------------------------------
-// POS: All Orders with Timers
+// POS / ADMIN: All Orders with Timers
 // ------------------------------------
 const getAllOrdersWithTimers = asyncHandler(async (req, res) => {
   const query = buildPOSAccessFilter(req.user);
@@ -408,7 +407,7 @@ const getAllOrdersWithTimers = asyncHandler(async (req, res) => {
 });
 
 // ------------------------------------
-// POS: Orders To Pack
+// POS / ADMIN: Orders To Pack
 // ------------------------------------
 const getOrdersToPackWithTimers = asyncHandler(async (req, res) => {
   const query = {
@@ -431,7 +430,7 @@ const getOrdersToPackWithTimers = asyncHandler(async (req, res) => {
 });
 
 // ------------------------------------
-// POS: Orders To Dispatch
+// POS / ADMIN: Orders To Dispatch
 // ------------------------------------
 const getOrdersToDispatchWithTimers = asyncHandler(async (req, res) => {
   const query = {
@@ -455,7 +454,7 @@ const getOrdersToDispatchWithTimers = asyncHandler(async (req, res) => {
 });
 
 // ------------------------------------
-// POS: Orders To Deliver
+// POS / ADMIN: Orders To Deliver
 // ------------------------------------
 const getOrdersToDeliverWithTimers = asyncHandler(async (req, res) => {
   const query = {
@@ -479,7 +478,7 @@ const getOrdersToDeliverWithTimers = asyncHandler(async (req, res) => {
 });
 
 // ------------------------------------
-// POS: Mark Packed
+// POS / ADMIN: Mark Packed
 // ------------------------------------
 const updateOrderToPackedWithTimers = async (req, res) => {
   try {
@@ -507,7 +506,7 @@ const updateOrderToPackedWithTimers = async (req, res) => {
 };
 
 // ------------------------------------
-// POS: Mark Dispatched
+// POS / ADMIN: Mark Dispatched
 // ------------------------------------
 const updateOrdersToDispatchedWithTimers = async (req, res) => {
   try {
@@ -535,7 +534,7 @@ const updateOrdersToDispatchedWithTimers = async (req, res) => {
 };
 
 // ------------------------------------
-// POS: Mark Delivered
+// POS / ADMIN: Mark Delivered
 // ------------------------------------
 const updateOrdersToDeliveredWithTimers = async (req, res) => {
   try {
@@ -563,7 +562,7 @@ const updateOrdersToDeliveredWithTimers = async (req, res) => {
 };
 
 // ------------------------------------
-// POS: Mark Paid
+// POS / ADMIN: Mark Paid
 // ------------------------------------
 const updateOrdersToPaidWithTimers = async (req, res) => {
   try {
