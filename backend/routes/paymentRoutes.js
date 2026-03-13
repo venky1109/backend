@@ -1,15 +1,16 @@
 import express from 'express';
-import { initiatePaymentAtDelivery,initiatePayment, handlePaymentResponse } from '../controllers/paymentController.js';
+import {
+  initiatePaymentAtDelivery,
+  initiatePayment,
+  handlePaymentResponse,
+  completePosUpiPayment,
+} from '../controllers/paymentController.js';
 
 const router = express.Router();
 
-
-router.post('/initiateJuspayPaymentAtDelivery', initiatePaymentAtDelivery); 
-                                                
-// Route to initiate payment
+router.post('/initiateJuspayPaymentAtDelivery', initiatePaymentAtDelivery);
 router.post('/initiateJuspayPayment', initiatePayment);
-
-// Route to handle payment response
+router.post('/completePosUpiPayment', completePosUpiPayment);
 router.post('/handleJuspayResponse', handlePaymentResponse);
 
 export default router;

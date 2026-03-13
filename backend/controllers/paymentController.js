@@ -1,5 +1,5 @@
 import fs from 'fs';
-import Product from '../models/productModel.js'; 
+import Product from '../models/productModel.js';
 import Order from '../models/orderModel.js';
 import { Juspay, APIError } from 'expresscheckout-nodejs';
 import { makeError, makeJuspayResponse } from '../utils/helpers.js';
@@ -7,44 +7,105 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// // Read keys from .env
 // const publicKey = fs.readFileSync(process.env.PUBLIC_KEY_PATH, 'utf8');
 // const privateKey = fs.readFileSync(process.env.PRIVATE_KEY_PATH, 'utf8');
 const publicKey = process.env.PUBLIC_KEY;
 const privateKey = process.env.PRIVATE_KEY;
 
-// Initialize Juspay
 // const baseUrl = process.env.ENVIRONMENT === 'production'
-//     ? 'https://smartgateway.hdfcbank.com'
-//     : 'https://smartgatewayuat.hdfcbank.com';
+//   ? 'https://smartgateway.hdfcbank.com'
+//   : 'https://smartgatewayuat.hdfcbank.com';
 
 const baseUrl = 'https://smartgateway.hdfcbank.com';
 
 const juspay = new Juspay({
-    merchantId: process.env.MERCHANT_ID,
-    baseUrl,
-    jweAuth: {
-        keyId: process.env.KEY_UUID,
-        publicKey,
-        privateKey,
-    },
+  merchantId: process.env.MERCHANT_ID,
+  baseUrl,
+  jweAuth: {
+    keyId: process.env.KEY_UUID,
+    publicKey,
+    privateKey,
+  },
 });
 
-export const initiatePaymentAtDelivery = async (req, res) => {
-    // console.log('Request body:', req.body);
+const recalculateCartAmount = async (cartItems = []) => {
+  if (!cartItems || !cartItems.length) {
+    throw new Error('Cart items are required');
+  }
 
-    const { amount, customerId ,order_id } = req.body;
+  const productIds = cartItems.map((item) => item.productId);
+  const dbProducts = await Product.find({ _id: { $in: productIds } });
 
-    if (!amount || !customerId ) {
-        return res.status(400).json({
-            success: false,
-            message: 'Amount, Customer ID, and Cart Items are required',
-        });
+  const financialIds = cartItems.map((item) => item.financialId);
+
+  const matchedProducts = await Product.find({
+    'details.financials._id': { $in: financialIds },
+  });
+
+  let matchCount = 0;
+
+  financialIds.forEach((fid) => {
+    matchedProducts.forEach((product) => {
+      product.details.forEach((detail) => {
+        if (detail.financials) {
+          detail.financials.forEach((fin) => {
+            if (String(fin._id) === String(fid)) {
+              matchCount++;
+            }
+          });
+        }
+      });
+    });
+  });
+
+  if (!dbProducts || matchCount !== cartItems.length) {
+    throw new Error('Invalid cart items. Please verify your cart.');
+  }
+
+  let recalculatedAmount = 0;
+
+  cartItems.forEach((cartItem) => {
+    const dbProduct = dbProducts.find(
+      (product) => product._id.toString() === String(cartItem.productId)
+    );
+
+    if (!dbProduct) {
+      throw new Error(`Product not found for ID: ${cartItem.productId}`);
     }
 
-    try {
- 
-           // Step 1: Fetch order from DB using order_id
+    const dbDetail = dbProduct.details.find(
+      (detail) => detail._id.toString() === String(cartItem.brandId)
+    );
+
+    if (!dbDetail) {
+      throw new Error(`Brand details not found for ID: ${cartItem.brandId}`);
+    }
+
+    const dbFinancial = dbDetail.financials.find(
+      (financial) => financial._id.toString() === String(cartItem.financialId)
+    );
+
+    if (!dbFinancial) {
+      throw new Error(`Financial details not found for ID: ${cartItem.financialId}`);
+    }
+
+    recalculatedAmount += Number(dbFinancial.dprice) * Number(cartItem.qty);
+  });
+
+  return recalculatedAmount;
+};
+
+export const initiatePaymentAtDelivery = async (req, res) => {
+  const { amount, customerId, order_id } = req.body;
+
+  if (!amount || !customerId || !order_id) {
+    return res.status(400).json({
+      success: false,
+      message: 'Amount, Customer ID, and order_id are required',
+    });
+  }
+
+  try {
     const order = await Order.findById(order_id);
 
     if (!order) {
@@ -54,12 +115,10 @@ export const initiatePaymentAtDelivery = async (req, res) => {
       });
     }
 
-    const orderAmount = order.totalPrice;
-
-    const dbAmount = parseFloat(order.totalPrice).toFixed(2);
+    const orderAmount = Number(order.totalPrice);
+    const dbAmount = orderAmount.toFixed(2);
     const clientAmount = parseFloat(amount).toFixed(2);
 
-    //  Amount Tampering Check
     if (dbAmount !== clientAmount) {
       console.error(`Amount mismatch. DB: ${dbAmount}, Client: ${clientAmount}`);
       return res.status(400).json({
@@ -68,268 +127,226 @@ export const initiatePaymentAtDelivery = async (req, res) => {
       });
     }
 
+    const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse`;
 
-
-        // Generate return URL
-        const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse`;
-
-        // Create Juspay order session
-        const sessionResponse = await juspay.orderSession.create({
-            order_id: order_id,
-            amount: orderAmount.toFixed(2),
-            payment_page_client_id: process.env.PAYMENT_PAGE_CLIENT_ID,
-            customer_id: customerId,
-            action: 'paymentPage',
-            return_url: returnUrl,
-            currency: 'INR',
-        });
-
-        // console.log('Backend returnUrl:', returnUrl);
-
-
-        // Send response to the frontend
-        res.status(200).json(makeJuspayResponse(sessionResponse));
-    } catch (error) {
-        console.error('Error initiating payment:', error.message);
-
-        if (error instanceof APIError) {
-            return res.status(400).json(makeError(error.message));
-        }
-
-        res.status(500).json(makeError('Internal Server Error. Please try again.'));
-    }
-};
-
-// Controller: Initiate Payment
-export const initiatePayment = async (req, res) => {
-    // console.log('Request body:', req.body);
-
-    const { amount, customerId, cartItems,order_id } = req.body;
-
-    if (!amount || !customerId || !cartItems || !cartItems.length) {
-        return res.status(400).json({
-            success: false,
-            message: 'Amount, Customer ID, and Cart Items are required',
-        });
-    }
-
-    try {
-        // Fetch products from the database based on cart item product IDs
-        const productIds = cartItems.map((item) => item.productId);
-        const dbProducts = await Product.find({ _id: { $in: productIds } });
-
-        const financialIds = cartItems.map((item) => item.financialId);
-
-
-const matchedProducts = await Product.find({
-  'details.financials._id': { $in: financialIds }
-});
-
-let matchCount = 0;
-
-// Count how many individual `financialId` entries actually matched
-financialIds.forEach(fid => {
-  matchedProducts.forEach(product => {
-    product.details.forEach(detail => {
-      if (detail.financials) {
-        detail.financials.forEach(fin => {
-          if (String(fin._id) === String(fid)) {
-            matchCount++;
-          }
-        });
-      }
+    const sessionResponse = await juspay.orderSession.create({
+      order_id,
+      amount: orderAmount.toFixed(2),
+      payment_page_client_id: process.env.PAYMENT_PAGE_CLIENT_ID,
+      customer_id: customerId,
+      action: 'paymentPage',
+      return_url: returnUrl,
+      currency: 'INR',
     });
-  });
-});
 
-// console.log("Matched financial count:", matchCount);
+    return res.status(200).json(makeJuspayResponse(sessionResponse));
+  } catch (error) {
+    console.error('Error initiating delivery payment:', error.message || error);
 
-        // console.log(financialIds)
-        // console.log(matchedProducts)
-        // console.log(financialIds.length,matchCount)
-        if (!dbProducts || matchCount !== cartItems.length) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid cart items. Please verify your cart.',
-            });
-        }
+    if (error instanceof APIError) {
+      return res.status(400).json(makeError(error.message));
+    }
 
-        // Recalculate the total amount on the backend
-        let recalculatedAmount = 0;
-        cartItems.forEach((cartItem) => {
-            const dbProduct = dbProducts.find(
-                (product) => product._id.toString() === cartItem.productId
-            );
+    return res
+      .status(500)
+      .json(makeError('Internal Server Error. Please try again.'));
+  }
+};
 
-            if (dbProduct) {
-                const dbDetail = dbProduct.details.find(
-                    (detail) => detail._id.toString() === cartItem.brandId
-                );
+// POS / general payment initiation
+export const initiatePayment = async (req, res) => {
+  const { amount, customerId, cartItems, order_id } = req.body;
 
-                if (dbDetail) {
-                    const dbFinancial = dbDetail.financials.find(
-                        (financial) => financial._id.toString() === cartItem.financialId
-                    );
+  if (!amount || !customerId || !cartItems || !cartItems.length || !order_id) {
+    return res.status(400).json({
+      success: false,
+      message: 'Amount, Customer ID, Cart Items and order_id are required',
+    });
+  }
 
-                    if (dbFinancial) {
-                        recalculatedAmount += dbFinancial.dprice * cartItem.qty;
-                    } else {
-                        throw new Error(`Financial details not found for ID: ${cartItem.financialId}`);
-                    }
-                } else {
-                    throw new Error(`Brand details not found for ID: ${cartItem.brandId}`);
-                }
-            } else {
-                throw new Error(`Product not found for ID: ${cartItem.productId}`);
-            }
-        });
-        // console.log('recalculatedAmount',recalculatedAmount)
-        // console.log('amount'+amount)
-        // const orderId = `${Date.now()}_${customerId}`;
-          // Validate that recalculated amount matches the provided amount
+  try {
+    const recalculatedAmount = await recalculateCartAmount(cartItems);
+
     if (recalculatedAmount.toFixed(2) !== parseFloat(amount).toFixed(2)) {
-        console.error(`Amount mismatch detected. Recalculated: ${recalculatedAmount}, Provided: ${amount}`);
-        return res.status(400).json({
-            success: false,
-            message: 'Amount mismatch detected. Payment initiation aborted.',
-        });
+      console.error(
+        `Amount mismatch detected. Recalculated: ${recalculatedAmount}, Provided: ${amount}`
+      );
+      return res.status(400).json({
+        success: false,
+        message: 'Amount mismatch detected. Payment initiation aborted.',
+      });
     }
 
-        // Generate return URL
-        const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse`;
+    const returnUrl = process.env.POS_FRONTEND_URL
+      ? `${process.env.POS_FRONTEND_URL}/payment-status?orderId=${order_id}&amount=${parseFloat(
+          amount
+        ).toFixed(2)}`
+      : `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse`;
 
-        // Create Juspay order session
-        const sessionResponse = await juspay.orderSession.create({
-            order_id: order_id,
-            amount: recalculatedAmount.toFixed(2),
-            payment_page_client_id: process.env.PAYMENT_PAGE_CLIENT_ID,
-            customer_id: customerId,
-            action: 'paymentPage',
-            return_url: returnUrl,
-            currency: 'INR',
-        });
+    const sessionResponse = await juspay.orderSession.create({
+      order_id,
+      amount: recalculatedAmount.toFixed(2),
+      payment_page_client_id: process.env.PAYMENT_PAGE_CLIENT_ID,
+      customer_id: customerId,
+      action: 'paymentPage',
+      return_url: returnUrl,
+      currency: 'INR',
+    });
 
-        // console.log('Backend returnUrl:', returnUrl);
+    return res.status(200).json(makeJuspayResponse(sessionResponse));
+  } catch (error) {
+    console.error('Error initiating payment:', error.message || error);
 
-
-        // Send response to the frontend
-        res.status(200).json(makeJuspayResponse(sessionResponse));
-    } catch (error) {
-        console.error('Error initiating payment:', error.message);
-
-        if (error instanceof APIError) {
-            return res.status(400).json(makeError(error.message));
-        }
-
-        res.status(500).json(makeError('Internal Server Error. Please try again.'));
+    if (error instanceof APIError) {
+      return res.status(400).json(makeError(error.message));
     }
+
+    return res
+      .status(500)
+      .json(makeError(error.message || 'Internal Server Error. Please try again.'));
+  }
 };
 
-// Controller: Handle Payment Response
-// export const handlePaymentResponse = async (req, res) => {
-//     const orderId = req.body.order_id || req.body.orderId;
+// POS payment completion / verification after redirect
+export const completePosUpiPayment = async (req, res) => {
+  const { orderId, amount, cartItems } = req.body;
 
-//     if (!orderId) {
-//         return res.status(400).json({ success: false, message: 'Order ID is required' });
-//     }
+  if (!orderId || !amount || !cartItems || !cartItems.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'orderId, amount and cartItems are required',
+    });
+  }
 
-//     try {
-//         const statusResponse = await juspay.order.status(orderId);
-//         const orderStatus = statusResponse.status;
-//         console.log('JusPAY Response API:', JSON.stringify(statusResponse, null, 2));
+  try {
+    const statusResponse = await juspay.order.status(orderId);
+    const orderStatus = statusResponse.status;
 
+    const recalculatedAmount = await recalculateCartAmount(cartItems);
 
-//         let redirectUrl = `${process.env.FRONTEND_URL}/payment/failure`;
-//         if (orderStatus === 'CHARGED') {
-//             redirectUrl = `${process.env.FRONTEND_URL}/payment/success?orderId=${orderId}`;
-//         }
+    if (recalculatedAmount.toFixed(2) !== parseFloat(amount).toFixed(2)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount mismatch detected from cart validation',
+      });
+    }
 
-//         // Redirect to the frontend based on payment status
-//         return res.redirect(redirectUrl);
-//     } catch (error) {
-//         return res.status(500).json({ success: false, message: 'Internal server error', error });
-//     }
-// };
+    if (
+      parseFloat(statusResponse.amount).toFixed(2) !==
+      parseFloat(amount).toFixed(2)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount mismatch detected from payment gateway',
+      });
+    }
 
+    if (orderStatus !== 'CHARGED') {
+      return res.status(200).json({
+        success: false,
+        status: orderStatus,
+        message: 'Payment failed or not completed',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      status: orderStatus,
+      message: 'Payment completed successfully',
+      paymentResult: {
+        id: statusResponse.order_id,
+        status: statusResponse.status,
+        update_time: statusResponse.last_updated,
+        phone_number: statusResponse.customer_phone || '',
+      },
+    });
+  } catch (error) {
+    console.error('Error completing POS UPI payment:', error.message || error);
+
+    if (error instanceof APIError) {
+      return res.status(400).json(makeError(error.message));
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Internal server error',
+    });
+  }
+};
+
+// Existing handler for online / delivery redirect flow
 export const handlePaymentResponse = async (req, res) => {
-    const orderId = req.body.order_id || req.body.orderId;
+  const orderId = req.body.order_id || req.body.orderId;
 
-    if (!orderId) {
-        console.error('Order ID is missing in the request.');
-        return res.status(400).json({ success: false, message: 'Order ID is required' });
+  if (!orderId) {
+    console.error('Order ID is missing in the request.');
+    return res.status(400).json({
+      success: false,
+      message: 'Order ID is required',
+    });
+  }
+
+  try {
+    const statusResponse = await juspay.order.status(orderId);
+    const orderStatus = statusResponse.status;
+
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      console.error(`Order with ID ${orderId} not found in the database.`);
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found',
+      });
     }
 
-    try {
-        // Verify payment status with Juspay
-        const statusResponse = await juspay.order.status(orderId);
-        const orderStatus = statusResponse.status;
+    if (
+      parseFloat(order.totalPrice).toFixed(2) !==
+      parseFloat(statusResponse.amount).toFixed(2)
+    ) {
+      console.error(
+        `Amount mismatch for Order ID ${orderId}. Expected: ${order.totalPrice}, Received: ${statusResponse.amount}`
+      );
+      return res.status(400).json({
+        success: false,
+        message: 'Amount tampering detected. Payment rejected.',
+      });
+    }
 
-        // console.log('JusPAY Response API:', JSON.stringify(statusResponse, null, 2));
+    let redirectUrl =
+      order?.source !== 'ONLINE'
+        ? process.env.POS_FRONTEND_URL || 'https://pos-manakirana.firebaseapp.com/'
+        : 'https://www.manakirana.com/payment/failure';
 
-        // Fetch the corresponding order from the database
-        // const order = await Order.findOne({ orderId });
-        const order = await Order.findById(orderId); 
-
-        if (!order) {
-            console.error(`Order with ID ${orderId} not found in the database.`);
-            return res.status(404).json({ success: false, message: 'Order not found' });
-        }
-
-        // Validate the amount against the database
-        if (order.totalPrice.toString() !== statusResponse.amount.toString()) {
-            console.error(
-                `Amount mismatch for Order ID ${orderId}. Expected: ${order.totalPrice}, Received: ${statusResponse.amount}`
-            );
-            return res.status(400).json({ success: false, message: 'Amount tampering detected. Payment rejected.' });
-        }
-
-        // let redirectUrl = `${process.env.FRONTEND_URL}/payment/failure`;
-        let redirectUrl = `https://www.manakirana.com/payment/failure`;
-        // let redirectUrl = new URL(`/payment/failure`, process.env.FRONTEND_URL).toString();
-
-                    if (order?.source !== 'ONLINE') {
-    redirectUrl = `https://pos-manakirana.firebaseapp.com/`; // or your POS app's home screen
-  } else {
-    redirectUrl = `https://www.manakirana.com/payment/failure`;
     if (orderStatus === 'CHARGED') {
-            order.isPaid = true;
-            order.paidAt = Date.now();
-            order.paymentResult = {
-                id: statusResponse.order_id,
-                status: orderStatus,
-                update_time: statusResponse.last_updated,
-                phone_Number: statusResponse.customer_phone,
-            };
+      order.isPaid = true;
+      order.paidAt = Date.now();
+      order.paymentResult = {
+        id: statusResponse.order_id,
+        status: orderStatus,
+        update_time: statusResponse.last_updated,
+        phone_number: statusResponse.customer_phone || '',
+      };
 
-            await order.save();
+      await order.save();
 
-            // console.log(`Order ID ${orderId} marked as paid successfully.`);
-            // redirectUrl = `${process.env.FRONTEND_URL}/payment/success?orderId=${orderId}`;
-            // redirectUrl = new URL(`/payment/success?orderId=${orderId}`, process.env.FRONTEND_URL).toString();
-            // redirectUrl = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
-            if (order?.source !== 'ONLINE') {
-    redirectUrl = `https://pos-manakirana.firebaseapp.com/`; // or your POS app's home screen
-  } else {
-    redirectUrl = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
-  }
-
-            
-
-        } else {
-            console.error(`Payment for Order ID ${orderId} is not successful. Status: ${orderStatus}`);
-        }
-  }
-
-        // Update the order status if the payment is successful
-        
-
-        // Redirect to the frontend based on payment status
-        // console.log("redirectUrl"+redirectUrl)
-        return res.redirect(redirectUrl);
-    } catch (error) {
-        console.error('Error handling payment response:', error.message || error);
-        return res.status(500).json({ success: false, message: 'Internal server error', error });
+      redirectUrl =
+        order?.source !== 'ONLINE'
+          ? process.env.POS_FRONTEND_URL || 'https://pos-manakirana.firebaseapp.com/'
+          : `https://www.manakirana.com/payment/success?orderId=${orderId}`;
+    } else {
+      console.error(
+        `Payment for Order ID ${orderId} is not successful. Status: ${orderStatus}`
+      );
     }
+
+    return res.redirect(redirectUrl);
+  } catch (error) {
+    console.error('Error handling payment response:', error.message || error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error,
+    });
+  }
 };
-
-
