@@ -279,6 +279,12 @@ export const completePosUpiPayment = async (req, res) => {
 
 // Return URL handler from Juspay
 export const handlePaymentResponse = async (req, res) => {
+
+    // console.log(req.body);
+     console.log('handlePaymentResponse method:', req.method);
+    console.log('handlePaymentResponse body:', req.body);
+    console.log('handlePaymentResponse query:', req.query);
+    console.log('handlePaymentResponse headers origin:', req.headers.origin);
   const orderId =
     req.body?.order_id ||
     req.body?.orderId ||
