@@ -340,7 +340,7 @@ export const handlePaymentResponse = async (req, res) => {
           : `https://www.manakirana.com/payment/success?orderId=${orderId}`;
     }
 
-    return res.redirect(302, redirectUrl);
+    return res.redirect(303, redirectUrl);
   } catch (error) {
     console.error('Error handling payment response:', error.message || error);
     return res.status(500).json({

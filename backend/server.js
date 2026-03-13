@@ -40,6 +40,7 @@ const io = new Server(server, {
       'https://www.etrug.app',
       'https://smartgatewayuat.hdfcbank.com', // Juspay's Sandbox Gateway
       'https://smartgateway.hdfcbank.com', // Juspay's Production Gateway
+       'https://smartgateway.hdfc.bank.in',
       'https://manakirana-988b3.firebaseapp.com/',
       'https://pos-manakirana.firebaseapp.com',
       'https://pos-manakirana.web.app'
@@ -72,6 +73,7 @@ const allowedOrigins = [
   'https://www.etrug.app',
   'https://smartgatewayuat.hdfcbank.com', // Juspay's Sandbox Gateway
   'https://smartgateway.hdfcbank.com', // Juspay's Production Gateway
+  'https://smartgateway.hdfc.bank.in',
   'https://manakirana-988b3.firebaseapp.com',
   'https://pos-manakirana.web.app',
      'https://pos-manakirana.firebaseapp.com'
