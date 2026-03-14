@@ -197,8 +197,7 @@ const isPaid =
       paidAt: isPaid ? Date.now() : null,
       posUserName: resolvedPosUserName,
       posLocation: resolvedPosLocation,
-          isPaid:order.isPaid||'',
-    paymentMethod:order.paymentMethod||'',
+     
     });
 
     return res.status(201).json(createdOrder);
