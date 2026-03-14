@@ -277,7 +277,7 @@ export const initiatePaymentAtDelivery = async (req, res) => {
 
 export const handlePaymentResponse = async (req, res) => {
   const orderId = req.body.order_id || req.body.orderId;
-  const amount=req.body.amount;
+//   const amount=req.body.amount;
 
   if (!orderId) {
     return res.status(400).json({ success: false, message: 'Order ID is required' });
@@ -288,6 +288,7 @@ export const handlePaymentResponse = async (req, res) => {
     const orderStatus = statusResponse.status;
 
     const order = await Order.findById(orderId);
+     const amount = Number(order.totalPrice).toFixed(2);
 
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
