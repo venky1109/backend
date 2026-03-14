@@ -13,7 +13,7 @@ dotenv.config();
 const publicKey = process.env.PUBLIC_KEY;
 const privateKey = process.env.PRIVATE_KEY;
 
-// Initialize Juspay
+// // Initialize Juspay
 // const baseUrl = process.env.ENVIRONMENT === 'production'
 //     ? 'https://smartgateway.hdfcbank.com'
 //     : 'https://smartgatewayuat.hdfcbank.com';
