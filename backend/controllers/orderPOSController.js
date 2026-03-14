@@ -163,10 +163,12 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
 
   const { itemsPrice, shippingPrice, totalPrice } = calcPrices(dbOrderItems);
   const source = 'CASHIER';
-  const isPaid =
-    ['CASH', 'CASH OR UPI', 'UPI', 'CARD'].includes(
-      String(paymentMethod || '').toUpperCase()
-    );
+const normalizedPaymentMethod = String(paymentMethod || '').toUpperCase();
+
+// UPI must stay unpaid until HDFC callback confirms success
+const isPaid =
+  normalizedPaymentMethod === 'CASH' ;
+
 
   let resolvedPosUserName = posUserName || null;
   let resolvedPosLocation = posLocation || null;
