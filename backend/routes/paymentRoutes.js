@@ -10,8 +10,9 @@ router.post('/initiateJuspayPaymentAtDelivery', initiatePaymentAtDelivery);
 // // Route to initiate payment
 // router.post('/initiateJuspayPayment', initiatePayment);
 
-// Route to handle payment response
+// Juspay may hit as POST, and redirect flow can also be handled with GET if needed
 router.post('/handleJuspayResponse', handlePaymentResponse);
+router.get('/handleJuspayResponse', handlePaymentResponse);
 
 
 export default router;
