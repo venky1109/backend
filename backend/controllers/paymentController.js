@@ -277,6 +277,7 @@ export const initiatePaymentAtDelivery = async (req, res) => {
 
 export const handlePaymentResponse = async (req, res) => {
   const orderId = req.body.order_id || req.body.orderId;
+  const amount=req.body.amount;
 
   if (!orderId) {
     return res.status(400).json({ success: false, message: 'Order ID is required' });
@@ -299,8 +300,9 @@ export const handlePaymentResponse = async (req, res) => {
       });
     }
 
-    const posSuccess = `https://pos-manakirana.firebaseapp.com/payment/success?orderId=${orderId}`;
-    const posFailure = `https://pos-manakirana.firebaseapp.com/payment/failure?orderId=${orderId}`;
+  const posSuccess = `https://pos-manakirana.firebaseapp.com/payment/success?orderId=${orderId}&amount=${amount}`;
+const posFailure = `https://pos-manakirana.firebaseapp.com/payment/failure?orderId=${orderId}&amount=${amount}`;
+
     const webSuccess = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
     const webFailure = `https://www.manakirana.com/payment/failure`;
 
