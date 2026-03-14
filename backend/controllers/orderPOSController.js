@@ -197,6 +197,8 @@ const isPaid =
       paidAt: isPaid ? Date.now() : null,
       posUserName: resolvedPosUserName,
       posLocation: resolvedPosLocation,
+          isPaid:order.isPaid||'',
+    paymentMethod:order.paymentMethod||'',
     });
 
     return res.status(201).json(createdOrder);
@@ -265,6 +267,8 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
       totalPrice: order.totalPrice || 0,
       posUserName: order.posUserName || '',
       posLocation: order.posLocation || '',
+          isPaid:order.isPaid||'',
+    paymentMethod:order.paymentMethod||'',
       source: order.source || '',
     }));
 
@@ -290,6 +294,8 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
     totalPrice: order.totalPrice || 0,
     posUserName: order.posUserName || '',
     posLocation: order.posLocation || '',
+        isPaid:order.isPaid||'',
+    paymentMethod:order.paymentMethod||'',
     source: order.source || '',
   }));
 
@@ -337,6 +343,8 @@ const getPOSOrderDetails = asyncHandler(async (req, res) => {
     totalPrice: order.totalPrice || 0,
     posUserName: order.posUserName || '',
     posLocation: order.posLocation || '',
+    isPaid:order.isPaid||'',
+    paymentMethod:order.paymentMethod||'',
     source: order.source || '',
     items,
   });
