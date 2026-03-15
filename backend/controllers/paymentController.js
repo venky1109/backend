@@ -303,7 +303,8 @@ export const handlePaymentResponse = async (req, res) => {
 
  const posSuccess = `https://pos-manakirana.firebaseapp.com/payment/success?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
 
-const posFailure = `https://pos-manakirana.firebaseapp.com/payment/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
+// const posFailure = `https://pos-manakirana.firebaseapp.com/payment/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
+const posFailure =`https://pos-manakirana.firebaseapp.com/payment/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}&status=${orderStatus}&reason=${statusResponse.error_message}`;
 
     const webSuccess = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
     const webFailure = `https://www.manakirana.com/payment/failure`;
