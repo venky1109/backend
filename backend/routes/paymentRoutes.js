@@ -1,5 +1,5 @@
 import express from 'express';
-import { initiatePaymentAtDelivery, handlePaymentResponse,  
+import { initiatePaymentAtDelivery, handlePaymentResponse, retryPaymentForExistingOrder, 
    } from '../controllers/paymentController.js';
 
 const router = express.Router();
@@ -13,6 +13,7 @@ router.post('/initiateJuspayPaymentAtDelivery', initiatePaymentAtDelivery);
 // Juspay may hit as POST, and redirect flow can also be handled with GET if needed
 router.post('/handleJuspayResponse', handlePaymentResponse);
 router.get('/handleJuspayResponse', handlePaymentResponse);
+router.post('/retry/:orderId', retryPaymentForExistingOrder);
 
 
 export default router;

@@ -274,7 +274,40 @@ export const initiatePaymentAtDelivery = async (req, res) => {
 //         return res.status(500).json({ success: false, message: 'Internal server error', error });
 //     }
 // };
+export const retryPaymentForExistingOrder = async (req, res) => {
+  const { orderId } = req.params;
 
+  try {
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.isPaid) {
+      return res.status(400).json({ message: 'Order is already paid' });
+    }
+
+    const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse`;
+
+    const sessionPayload = {
+      order_id: String(order._id),
+      amount: Number(order.totalPrice).toFixed(2),
+      payment_page_client_id: process.env.PAYMENT_PAGE_CLIENT_ID,
+      customer_id: order.user?.toString() || `POS_${Date.now()}`,
+      action: 'paymentPage',
+      return_url: returnUrl,
+      currency: 'INR',
+    };
+
+    const sessionResponse = await juspay.orderSession.create(sessionPayload);
+
+    return res.status(200).json(makeJuspayResponse(sessionResponse));
+  } catch (error) {
+    console.error('retryPaymentForExistingOrder error:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
 export const handlePaymentResponse = async (req, res) => {
   const orderId = req.body.order_id || req.body.orderId;
 //   const amount=req.body.amount;
