@@ -120,6 +120,8 @@ export const initiatePaymentAtDelivery = async (req, res) => {
         res.status(500).json(makeError('Internal Server Error. Please try again.'));
     }
 };
+export const initiatePayment = async (req, res) => {
+};
 
 // Controller: Initiate Payment
 // export const initiatePayment = async (req, res) => {
