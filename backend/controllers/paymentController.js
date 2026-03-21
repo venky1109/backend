@@ -121,6 +121,127 @@ export const initiatePaymentAtDelivery = async (req, res) => {
     }
 };
 export const initiatePayment = async (req, res) => {
+    // console.log('Request body:', req.body);
+
+    const { amount, customerId, cartItems,order_id } = req.body;
+
+    if (!amount || !customerId || !cartItems || !cartItems.length) {
+        return res.status(400).json({
+            success: false,
+            message: 'Amount, Customer ID, and Cart Items are required',
+        });
+    }
+
+    try {
+        // Fetch products from the database based on cart item product IDs
+        const productIds = cartItems.map((item) => item.productId);
+        const dbProducts = await Product.find({ _id: { $in: productIds } });
+
+        const financialIds = cartItems.map((item) => item.financialId);
+
+
+const matchedProducts = await Product.find({
+  'details.financials._id': { $in: financialIds }
+});
+
+let matchCount = 0;
+
+// Count how many individual `financialId` entries actually matched
+financialIds.forEach(fid => {
+  matchedProducts.forEach(product => {
+    product.details.forEach(detail => {
+      if (detail.financials) {
+        detail.financials.forEach(fin => {
+          if (String(fin._id) === String(fid)) {
+            matchCount++;
+          }
+        });
+      }
+    });
+  });
+});
+
+// console.log("Matched financial count:", matchCount);
+
+        // console.log(financialIds)
+        // console.log(matchedProducts)
+        // console.log(financialIds.length,matchCount)
+        if (!dbProducts || matchCount !== cartItems.length) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid cart items. Please verify your cart.',
+            });
+        }
+
+        // Recalculate the total amount on the backend
+        let recalculatedAmount = 0;
+        cartItems.forEach((cartItem) => {
+            const dbProduct = dbProducts.find(
+                (product) => product._id.toString() === cartItem.productId
+            );
+
+            if (dbProduct) {
+                const dbDetail = dbProduct.details.find(
+                    (detail) => detail._id.toString() === cartItem.brandId
+                );
+
+                if (dbDetail) {
+                    const dbFinancial = dbDetail.financials.find(
+                        (financial) => financial._id.toString() === cartItem.financialId
+                    );
+
+                    if (dbFinancial) {
+                        recalculatedAmount += dbFinancial.dprice * cartItem.qty;
+                    } else {
+                        throw new Error(`Financial details not found for ID: ${cartItem.financialId}`);
+                    }
+                } else {
+                    throw new Error(`Brand details not found for ID: ${cartItem.brandId}`);
+                }
+            } else {
+                throw new Error(`Product not found for ID: ${cartItem.productId}`);
+            }
+        });
+        // console.log('recalculatedAmount',recalculatedAmount)
+        // console.log('amount'+amount)
+        // const orderId = `${Date.now()}_${customerId}`;
+          // Validate that recalculated amount matches the provided amount
+    if (recalculatedAmount.toFixed(2) !== parseFloat(amount).toFixed(2)) {
+        console.error(`Amount mismatch detected. Recalculated: ${recalculatedAmount}, Provided: ${amount}`);
+        return res.status(400).json({
+            success: false,
+            message: 'Amount mismatch detected. Payment initiation aborted.',
+        });
+    }
+
+        // Generate return URL
+        const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse`;
+
+        // Create Juspay order session
+        const sessionResponse = await juspay.orderSession.create({
+            order_id: order_id,
+            amount: recalculatedAmount.toFixed(2),
+            payment_page_client_id: process.env.PAYMENT_PAGE_CLIENT_ID,
+            customer_id: customerId,
+            action: 'paymentPage',
+            return_url: returnUrl,
+            currency: 'INR',
+        });
+
+        // console.log('Backend returnUrl:', returnUrl);
+
+
+        // Send response to the frontend
+        res.status(200).json(makeJuspayResponse(sessionResponse));
+    } catch (error) {
+        console.error('Error initiating payment:', error.message);
+
+        if (error instanceof APIError) {
+            return res.status(400).json(makeError(error.message));
+        }
+
+        res.status(500).json(makeError('Internal Server Error. Please try again.'));
+    }
 };
 
 // Controller: Initiate Payment
