@@ -12,13 +12,14 @@ dotenv.config();
 // const privateKey = fs.readFileSync(process.env.PRIVATE_KEY_PATH, 'utf8');
 const publicKey = process.env.PUBLIC_KEY;
 const privateKey = process.env.PRIVATE_KEY;
+const PaymentUrl=process.env.PAYMENT_RETURN_URL;
 
 // // Initialize Juspay
 // const baseUrl = process.env.ENVIRONMENT === 'production'
 //     ? 'https://smartgateway.hdfcbank.com'
 //     : 'https://smartgatewayuat.hdfcbank.com';
 
-const baseUrl = 'https://smartgateway.hdfcbank.com';
+const baseUrl = process.env.BASE_URL;
 
 
 // console.log('Juspay config check', {
@@ -45,7 +46,7 @@ const juspay = new Juspay({
 
 
 export const initiatePaymentAtDelivery = async (req, res) => {
-//    console.log('✅ initiatePaymentAtDelivery called', {
+//    console.log('✅ initiatePaymentAtDelivery called', { 
 //   amount: req.body.amount,
 //   customerId: req.body.customerId,
 //   order_id: req.body.order_id,
@@ -462,9 +463,10 @@ export const handlePaymentResponse = async (req, res) => {
 // const posFailure = `https://pos-manakirana.firebaseapp.com/payment/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
 const posFailure =`https://pos-manakirana.firebaseapp.com/payment/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}&status=${orderStatus}&reason=${statusResponse.error_message}`;
 
-    const webSuccess = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
-    const webFailure = `https://www.manakirana.com/payment/failure`;
-
+    // const webSuccess = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
+    // const webFailure = `https://www.manakirana.com/payment/failure`;
+const webSuccess = `${PaymentUrl}/success?orderId=${orderId}`;
+const webFailure = `${PaymentUrl}/failure`;
     let redirectUrl = order?.source === 'ONLINE' ? webFailure : posFailure;
 
     if (orderStatus === 'CHARGED') {
