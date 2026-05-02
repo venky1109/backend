@@ -13,7 +13,12 @@ import promotionRoutes from './routes/promotionRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import PosUserRoutes from './routes/posUserRoutes.js';
 import posProductRoutes from './routes/posProductRoutes.js';
-
+import catalogPgRoutes from './routes/inventory/catalogPgRoutes.js';
+import inventoryPgRoutes from './routes/inventory/inventoryPgRoutes.js';
+import purchasePgRoutes from './routes/inventory/purchasePgRoutes.js';
+import dispatchPgRoutes from './routes/inventory/dispatchPgRoutes.js';
+import paymentPgRoutes from './routes/inventory/paymentPgRoutes.js';
+import catalogBarcodeRoutes from './routes/inventory/catalogBarcodeRoutes.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
@@ -132,6 +137,12 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/promotions', promotionRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/pos-products', posProductRoutes);
+app.use('/api/catalog-pg', catalogPgRoutes);
+app.use('/api/inventory-pg', inventoryPgRoutes);
+app.use('/api/purchases', purchasePgRoutes);
+app.use('/api/dispatch-pg', dispatchPgRoutes);
+app.use('/api/payments-pg', paymentPgRoutes);
+app.use('/api/catalog-pg/product-barcodes', catalogBarcodeRoutes);
 
 
 app.get('/api/config/paypal', (req, res) =>

@@ -2,10 +2,15 @@ import jwt from 'jsonwebtoken';
 import asyncHandler from './asyncHandler.js';
 import PosUser from '../models/PosUserModel.js';
 
+
+// 🔐 Protect POS routes (JWT)
 export const protectPOS = asyncHandler(async (req, res, next) => {
   let token;
 
-  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+  if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith('Bearer')
+  ) {
     token = req.headers.authorization.split(' ')[1];
   }
 
@@ -14,17 +19,14 @@ export const protectPOS = asyncHandler(async (req, res, next) => {
   }
 
   try {
-    // console.log('🔍 Verifying token with:', process.env.JWT_SECRET_POS);
     const decoded = jwt.verify(token, process.env.JWT_SECRET_POS);
 
-    // Fetch POS user by decoded ID
     const user = await PosUser.findById(decoded.id).select('-password');
-  
-    
-
 
     if (!user || !user.isActive) {
-      return res.status(401).json({ message: 'POS user not found or deactivated' });
+      return res.status(401).json({
+        message: 'POS user not found or deactivated',
+      });
     }
 
     req.user = user;
@@ -35,78 +37,131 @@ export const protectPOS = asyncHandler(async (req, res, next) => {
   }
 });
 
-// ✅ Optional role check middleware
-export const isAdminOrProp = (req, res, next) => {
-  const { user } = req;
-  if (user && ['ADMIN', 'PROPRIETOR'].includes(user.role)) {
-    return next();
-  }
-  return res.status(403).json({ message: 'Admin or Proprietor access required' });
+
+// 🔁 Generic role checker
+const allowRoles = (roles, message = 'Access denied') => {
+  return (req, res, next) => {
+    if (req.user && roles.includes(req.user.role)) {
+      return next();
+    }
+
+    return res.status(403).json({ message });
+  };
 };
 
-// ✅ Optional role check middleware
-export const isAdminOrInventory = (req, res, next) => {
-  const { user } = req;
-  if (user && ['ADMIN', 'INVENTORY'].includes(user.role)) {
-    return next();
-  }
-  return res.status(403).json({ message: 'Admin or Proprietor access required' });
-};
 
-export const cashierOrAdmin = (req, res, next) => {
-  const allowedRoles = ['CASHIER', 'ONLINE_CASHIER', 'HYBRID_CASHIER', 'ADMIN'];
+// ✅ Catalog + Inventory + Purchase + Dispatch
+export const catalogInventoryAccess = allowRoles(
+  ['ADMIN', 'STOCK_MANAGER', 'CASHIER'],
+  'Access denied: ADMIN, STOCK_MANAGER, or CASHIER only'
+);
 
-  if (req.user && allowedRoles.includes(req.user.role)) {
-    return next();
-  }
 
-};
+// ✅ Admin / Proprietor
+export const isAdminOrProp = allowRoles(
+  ['ADMIN', 'PROPRIETOR'],
+  'Admin or Proprietor access required'
+);
+
+
+// ✅ Admin / Inventory support
+export const isAdminOrInventory = allowRoles(
+  ['ADMIN', 'INVENTORY', 'STOCK_MANAGER'],
+  'Admin or Inventory access required'
+);
+
+
+// ✅ Cashier / Admin
+export const cashierOrAdmin = allowRoles(
+  ['CASHIER', 'ONLINE_CASHIER', 'HYBRID_CASHIER', 'ADMIN'],
+  'Cashier or Admin access required'
+);
+
+
+// ✅ Allow all authenticated users
 export const allowAllRoles = (req, res, next) => {
   if (req.user && req.user.role) {
-    return next(); // All authenticated users with a role are allowed
-  }
-  return res.status(403).json({ message: 'Access denied: role missing or unauthorized' });
-};
-
-
-export const admin = (req, res, next) => {
-  if (req.user && req.user.role === 'ADMIN') {
-    next();
-  } else {
-    res.status(403);
-    throw new Error('Not authorized as admin');
-  }
-};
-
-export const onlineOrderManager = (req, res, next) => {
-  if (req.user && req.user.role === 'ONLINE_ORDER_MANAGER') {
     return next();
   }
-  return res.status(403).json({ message: 'Access denied: ONLINE_ORDER_MANAGER only' });
+
+  return res.status(403).json({
+    message: 'Access denied: role missing or unauthorized',
+  });
 };
 
 
-export const packingAgent = (req, res, next) => {
-  const roles = ['PACKING_AGENT', 'HYBRID_AGENT'];
-  if (req.user && roles.includes(req.user.role)) {
-    return next();
+// ✅ Admin only
+export const admin = allowRoles(
+  ['ADMIN'],
+  'Not authorized as admin'
+);
+
+
+// ✅ Online order manager
+export const onlineOrderManager = allowRoles(
+  ['ONLINE_ORDER_MANAGER'],
+  'Access denied: ONLINE_ORDER_MANAGER only'
+);
+
+
+// ✅ Packing agents
+export const packingAgent = allowRoles(
+  ['PACKING_AGENT', 'HYBRID_AGENT'],
+  'Access denied: PACKING_AGENT or HYBRID_AGENT only'
+);
+
+
+// ✅ Dispatch agents
+export const dispatchAgent = allowRoles(
+  ['DISPATCH_AGENT', 'HYBRID_AGENT'],
+  'Access denied: DISPATCH_AGENT or HYBRID_AGENT only'
+);
+
+
+// ✅ Delivery agents
+export const deliveryAgent = allowRoles(
+  ['DELIVERY_AGENT'],
+  'Access denied: DELIVERY_AGENT only'
+);
+
+
+// 💰 Payment access control
+export const paymentAccess = (req, res, next) => {
+  const role = req.user?.role;
+
+  if (!role) {
+    return res.status(401).json({ message: 'Unauthorized' });
   }
-  return res.status(403).json({ message: 'Access denied: PACKING_AGENT or HYBRID_AGENT only' });
-};
 
-
-export const dispatchAgent = (req, res, next) => {
-  const roles = ['DISPATCH_AGENT', 'HYBRID_AGENT'];
-  if (req.user && roles.includes(req.user.role)) {
-    return next();
+  // 👁 View payments
+  if (req.method === 'GET') {
+    if (['ADMIN', 'CASHIER', 'STOCK_MANAGER'].includes(role)) {
+      return next();
+    }
   }
-  return res.status(403).json({ message: 'Access denied: DISPATCH_AGENT or HYBRID_AGENT only' });
-};
 
-
-export const deliveryAgent = (req, res, next) => {
-  if (req.user && req.user.role === 'DELIVERY_AGENT') {
-    return next();
+  // ➕ Create payments
+  if (req.method === 'POST') {
+    if (['ADMIN', 'CASHIER'].includes(role)) {
+      return next();
+    }
   }
-  return res.status(403).json({ message: 'Access denied: DELIVERY_AGENT only' });
+
+  // ✏️ Update / ❌ Delete
+  if (['PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    if (role === 'ADMIN') {
+      return next();
+    }
+  }
+
+  return res.status(403).json({
+    message: 'Access denied for payments',
+  });
 };
+
+
+// 📦 Strict stock control (recommended)
+export const stockManagerOnly = allowRoles(
+  ['ADMIN', 'STOCK_MANAGER'],
+  'Access denied: ADMIN or STOCK_MANAGER only'
+);
