@@ -3,7 +3,7 @@ import express from 'express';
 import {
   InventoryProduct,
   StockTransaction,
-} from '../../models/inventory/inventoryModels.js';
+} from '../../models/inventory/inventoryProductModels.js';
 
 import {
   list,
@@ -15,6 +15,7 @@ import {
 
 import {
   receivePurchaseOrder,
+  addVerifiedPurchaseToInventory,
 } from '../../controllers/inventory/supplyController.js';
 
 import {
@@ -52,7 +53,10 @@ router.route('/stock-transactions/:id')
   .delete(remove(StockTransaction));
 
 
-// 📥 Receive PO → Update Stock
+// 📥 Receive PO → basic stock update
 router.post('/receive-purchase-order', receivePurchaseOrder);
+
+// ✅ Verified PO → inventory product with batch_id, sku_id, exp_date
+router.post('/receive-verified-purchase', addVerifiedPurchaseToInventory);
 
 export default router;

@@ -128,7 +128,7 @@ const product = await Product.findOne({
   "details.financials.barcode": { $in: [barcodesArray[0]] }  // Check if the first barcode is in the array
 });
 
-console.log('Found product:', product);
+// console.log('Found product:', product);
 
     if (!product) {
       return res.status(404).json({ error: "Product with barcode not found" });

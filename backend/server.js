@@ -19,6 +19,7 @@ import purchasePgRoutes from './routes/inventory/purchasePgRoutes.js';
 import dispatchPgRoutes from './routes/inventory/dispatchPgRoutes.js';
 import paymentPgRoutes from './routes/inventory/paymentPgRoutes.js';
 import catalogBarcodeRoutes from './routes/inventory/catalogBarcodeRoutes.js';
+// import dispatchRoutes from "./routes/dispatch/dispatchRoutes.js";
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
@@ -143,6 +144,7 @@ app.use('/api/purchases', purchasePgRoutes);
 app.use('/api/dispatch-pg', dispatchPgRoutes);
 app.use('/api/payments-pg', paymentPgRoutes);
 app.use('/api/catalog-pg/product-barcodes', catalogBarcodeRoutes);
+// app.use("/api/dispatch", dispatchRoutes);
 
 
 app.get('/api/config/paypal', (req, res) =>

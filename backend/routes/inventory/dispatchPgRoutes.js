@@ -1,21 +1,15 @@
 import express from 'express';
 
 import {
-  DispatchOrder,
-  DispatchOrderItem,
-} from '../../models/inventory/dispatchModels.js';
-
-import {
-  list,
-  getById,
-  create,
-  update,
-  remove,
-} from '../../controllers/inventory/crudController.js';
-
-import {
-  createDispatchWithItems,
-} from '../../controllers/inventory/supplyController.js';
+  getDispatchOrders,
+  getDispatchOrderById,
+  createDispatchOrder,
+  updateDispatchOrder,
+  updateDispatchOrderItems,
+  updateDispatchStatus,
+  deleteDispatchOrder,
+  receivedDispatchToOutletMongoStock,
+} from '../../controllers/inventory/dispatchController.js';
 
 import {
   protectPOS,
@@ -24,32 +18,16 @@ import {
 
 const router = express.Router();
 
-// 🔒 Only ADMIN, STOCK_MANAGER, CASHIER
 router.use(protectPOS);
 router.use(catalogInventoryAccess);
 
-router
-  .route('/orders')
-  .get(list(DispatchOrder))
-  .post(create(DispatchOrder));
+router.route('/orders').get(getDispatchOrders).post(createDispatchOrder);
 
-router.post('/orders-with-items', createDispatchWithItems);
+router.put('/orders/:id/received-to-outlet', receivedDispatchToOutletMongoStock);
 
-router
-  .route('/orders/:id')
-  .get(getById(DispatchOrder))
-  .put(update(DispatchOrder))
-  .delete(remove(DispatchOrder));
+router.route('/orders/:id').get(getDispatchOrderById).put(updateDispatchOrder).delete(deleteDispatchOrder);
 
-router
-  .route('/items')
-  .get(list(DispatchOrderItem))
-  .post(create(DispatchOrderItem));
-
-router
-  .route('/items/:id')
-  .get(getById(DispatchOrderItem))
-  .put(update(DispatchOrderItem))
-  .delete(remove(DispatchOrderItem));
+router.put('/orders/:id/items', updateDispatchOrderItems);
+router.put('/orders/:id/status', updateDispatchStatus);
 
 export default router;

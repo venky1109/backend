@@ -1,24 +1,43 @@
 import { getClient, query } from '../../config/pg.js';
-import { PurchaseOrder, PurchaseOrderItem } from '../../models/inventory/purchaseModels.js';
-import { DispatchOrder, DispatchOrderItem } from '../../models/inventory/dispatchModels.js';
+import {
+  PurchaseOrder,
+  PurchaseOrderItem,
+} from '../../models/inventory/purchaseModels.js';
+
+const getEffectivePrice = (item) => {
+  if (item.actual_unit_price !== undefined && item.actual_unit_price !== null) {
+    return Number(item.actual_unit_price);
+  }
+
+  return Number(item.expected_unit_price ?? item.unit_price ?? 0);
+};
+
+const getLineTotal = (item) => {
+  return Number(item.no_of_units || 1) * getEffectivePrice(item);
+};
 
 export const getSupplierProducts = async (req, res, next) => {
   try {
     const supplierId = req.params.supplierId;
+
     const { rows } = await query(
-      `SELECT ip.*, b.brand_name_english, c.category_name_english
-       FROM inventory.inventory_products ip
-       LEFT JOIN catalog.brands b ON b.id = ip.brand_id
-       LEFT JOIN catalog.categories c ON c.id = ip.category_id
-       WHERE ip.stakeholders_id = $1
-       ORDER BY ip.product_name`,
+      `
+      SELECT ip.*, b.brand_name_english, c.category_name_english
+      FROM inventory.inventory_products ip
+      LEFT JOIN catalog.brands b ON b.id = ip.brand_id
+      LEFT JOIN catalog.categories c ON c.id = ip.category_id
+      WHERE ip.stakeholders_id = $1
+      ORDER BY ip.product_name
+      `,
       [supplierId]
     );
+
     res.json(rows);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
-// import { getClient } from '../../config/pg.js';
 export const getPurchaseOrdersDetailed = async (req, res, next) => {
   try {
     const { rows } = await query(`
@@ -60,10 +79,14 @@ export const getPurchaseOrdersDetailed = async (req, res, next) => {
               'no_of_units', poi.no_of_units,
               'total_prod_price', poi.total_prod_price,
 
-              /* ✅ ADD THIS */
               'mk_barcode', pb.mk_barcode,
-              'barcode', pb.barcode
+              'barcode', pb.barcode,
 
+              'is_verified', false,
+              'exp_date', '',
+              'mfg_date', '',
+              'sku_id', '',
+              'inventory_remarks', ''
             )
           ) FILTER (WHERE poi.id IS NOT NULL),
           '[]'
@@ -92,7 +115,6 @@ export const getPurchaseOrdersDetailed = async (req, res, next) => {
       LEFT JOIN catalog.units u
         ON u.id = poi.unit_id
 
-      /* ✅ IMPORTANT JOIN */
       LEFT JOIN catalog.product_barcodes pb
         ON pb.product_id = poi.product_id
        AND pb.brand_id = poi.brand_id
@@ -117,12 +139,178 @@ export const getPurchaseOrdersDetailed = async (req, res, next) => {
     next(error);
   }
 };
-export const verifyReceivedPurchaseOrder = async (req, res, next) => {
+
+export const createPurchaseOrderWithItems = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    const {
+      supplier_id,
+      warehouse_id,
+      expected_date = null,
+      arrived_date = null,
+      remarks = null,
+      status = 'draft',
+      bill_details = {},
+      items = [],
+    } = req.body;
+
+    if (!supplier_id || !warehouse_id) {
+      return res.status(400).json({
+        message: 'supplier_id and warehouse_id are required',
+      });
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        message: 'At least one item is required',
+      });
+    }
+
+    for (const item of items) {
+      const expectedPrice = item.expected_unit_price ?? item.unit_price;
+
+      if (
+        !item.product_id ||
+        !item.brand_id ||
+        !item.category_id ||
+        !item.unit_id ||
+        !item.qty ||
+        expectedPrice === undefined ||
+        expectedPrice === null
+      ) {
+        return res.status(400).json({
+          message:
+            'Each item requires product_id, brand_id, category_id, unit_id, qty and expected_unit_price',
+        });
+      }
+    }
+
+    await client.query('BEGIN');
+
+    const totalAmount = items.reduce((sum, item) => {
+      return sum + getLineTotal(item);
+    }, 0);
+
+    const poNumber = `PO-${Date.now()}-${supplier_id}`;
+
+    const finalBillDetails = {
+      ...bill_details,
+      items: items.map((item) => {
+        const expectedPrice = Number(
+          item.expected_unit_price ?? item.unit_price ?? 0
+        );
+
+        const actualPrice =
+          item.actual_unit_price !== undefined &&
+          item.actual_unit_price !== null
+            ? Number(item.actual_unit_price)
+            : null;
+
+        const effectivePrice = actualPrice ?? expectedPrice;
+
+        return {
+          product_id: Number(item.product_id),
+          category_id: Number(item.category_id),
+          brand_id: Number(item.brand_id),
+          unit_id: Number(item.unit_id),
+          qty: Number(item.qty),
+          no_of_units: Number(item.no_of_units || 1),
+          expected_unit_price: expectedPrice,
+          actual_unit_price: actualPrice,
+          total: Number(item.no_of_units || 1) * effectivePrice,
+        };
+      }),
+    };
+
+    const poResult = await client.query(
+      `
+      INSERT INTO purchases.purchase_order (
+        po_number,
+        supplier_id,
+        warehouse_id,
+        expected_date,
+        arrived_date,
+        remarks,
+        status,
+        total_amount,
+        bill_details
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+      RETURNING *
+      `,
+      [
+        poNumber,
+        Number(supplier_id),
+        Number(warehouse_id),
+        expected_date,
+        arrived_date,
+        remarks,
+        status,
+        totalAmount,
+        JSON.stringify(finalBillDetails),
+      ]
+    );
+
+    const purchaseOrder = poResult.rows[0];
+    const insertedItems = [];
+
+    for (const item of items) {
+      const itemResult = await client.query(
+        `
+        INSERT INTO purchases.purchase_order_items (
+          purchase_order_id,
+          product_id,
+          category_id,
+          brand_id,
+          qty,
+          no_of_units,
+          unit_id,
+          expected_unit_price,
+          actual_unit_price
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        RETURNING *
+        `,
+        [
+          purchaseOrder.id,
+          Number(item.product_id),
+          Number(item.category_id),
+          Number(item.brand_id),
+          Number(item.qty),
+          Number(item.no_of_units || 1),
+          Number(item.unit_id),
+          Number(item.expected_unit_price ?? item.unit_price ?? 0),
+          item.actual_unit_price !== undefined && item.actual_unit_price !== null
+            ? Number(item.actual_unit_price)
+            : null,
+        ]
+      );
+
+      insertedItems.push(itemResult.rows[0]);
+    }
+
+    await client.query('COMMIT');
+
+    res.status(201).json({
+      message: 'Purchase order created successfully',
+      purchaseOrder,
+      items: insertedItems,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+};
+
+export const updatePurchaseOrderItems = async (req, res, next) => {
   const client = await getClient();
 
   try {
     const { id } = req.params;
-    const { items = [], remarks = null } = req.body;
+    const { items = [] } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ message: 'Items are required' });
@@ -142,10 +330,285 @@ export const verifyReceivedPurchaseOrder = async (req, res, next) => {
       return res.status(404).json({ message: 'Purchase order not found' });
     }
 
-    if (po.status !== 'received') {
+    if (String(po.status || '').toLowerCase() !== 'draft') {
       await client.query('ROLLBACK');
       return res.status(400).json({
-        message: 'Only received purchase orders can be verified',
+        message: 'Items can be edited only in draft status',
+      });
+    }
+
+    for (const item of items) {
+      const expectedPrice = item.expected_unit_price ?? item.unit_price;
+
+      if (
+        !item.product_id ||
+        !item.brand_id ||
+        !item.category_id ||
+        !item.unit_id ||
+        !item.qty ||
+        expectedPrice === undefined ||
+        expectedPrice === null
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          message:
+            'Each item requires product_id, brand_id, category_id, unit_id, qty and expected_unit_price',
+        });
+      }
+    }
+
+    await client.query(
+      `DELETE FROM purchases.purchase_order_items WHERE purchase_order_id = $1`,
+      [id]
+    );
+
+    let totalAmount = 0;
+    const insertedItems = [];
+
+    for (const item of items) {
+      const expectedPrice = Number(
+        item.expected_unit_price ?? item.unit_price ?? 0
+      );
+
+      const actualPrice =
+        item.actual_unit_price !== undefined && item.actual_unit_price !== null
+          ? Number(item.actual_unit_price)
+          : null;
+
+      totalAmount += getLineTotal(item);
+
+      const itemResult = await client.query(
+        `
+        INSERT INTO purchases.purchase_order_items (
+          purchase_order_id,
+          product_id,
+          category_id,
+          brand_id,
+          qty,
+          no_of_units,
+          unit_id,
+          expected_unit_price,
+          actual_unit_price
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        RETURNING *
+        `,
+        [
+          Number(id),
+          Number(item.product_id),
+          Number(item.category_id),
+          Number(item.brand_id),
+          Number(item.qty),
+          Number(item.no_of_units || 1),
+          Number(item.unit_id),
+          expectedPrice,
+          actualPrice,
+        ]
+      );
+
+      insertedItems.push(itemResult.rows[0]);
+    }
+
+    const finalBillDetails = {
+      ...(po.bill_details || {}),
+      items: insertedItems.map((item) => {
+        const expectedPrice = Number(item.expected_unit_price || 0);
+
+        const actualPrice =
+          item.actual_unit_price !== null && item.actual_unit_price !== undefined
+            ? Number(item.actual_unit_price)
+            : null;
+
+        const effectivePrice = actualPrice ?? expectedPrice;
+
+        return {
+          product_id: Number(item.product_id),
+          category_id: Number(item.category_id),
+          brand_id: Number(item.brand_id),
+          unit_id: Number(item.unit_id),
+          qty: Number(item.qty),
+          no_of_units: Number(item.no_of_units || 1),
+          expected_unit_price: expectedPrice,
+          actual_unit_price: actualPrice,
+          total: Number(item.no_of_units || 1) * effectivePrice,
+        };
+      }),
+    };
+
+    const updatedPoResult = await client.query(
+      `
+      UPDATE purchases.purchase_order
+      SET total_amount = $1,
+          bill_details = $2::jsonb,
+          updated_at = NOW()
+      WHERE id = $3
+      RETURNING *
+      `,
+      [totalAmount, JSON.stringify(finalBillDetails), Number(id)]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: 'Purchase order items updated successfully',
+      purchaseOrder: updatedPoResult.rows[0],
+      items: insertedItems,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+};
+
+export const receivePurchaseOrder = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    const {
+      purchase_order_id,
+      items = [],
+      source = 'supplier',
+      destination = 'warehouse',
+    } = req.body;
+
+    if (!purchase_order_id || !items.length) {
+      return res.status(400).json({
+        message: 'purchase_order_id and items are required',
+      });
+    }
+
+    await client.query('BEGIN');
+
+    const movements = [];
+
+    for (const item of items) {
+      const qty = Number(item.qty_in || item.qty || 0);
+
+      if (qty <= 0) {
+        throw new Error('qty must be greater than 0');
+      }
+
+      await client.query(
+        `
+        UPDATE inventory.inventory_products
+        SET count_in_stock = count_in_stock + $1,
+            updated_at = NOW()
+        WHERE id = $2
+        `,
+        [qty, item.product_id]
+      );
+
+      const stock = await client.query(
+        `
+        SELECT count_in_stock
+        FROM inventory.inventory_products
+        WHERE id = $1
+        `,
+        [item.product_id]
+      );
+
+      const balanceQty = stock.rows[0]?.count_in_stock || 0;
+
+      const movement = await client.query(
+        `
+        INSERT INTO inventory.stock_transaction (
+          product_id,
+          source,
+          destination,
+          ref_type,
+          qty_in,
+          qty_out,
+          balance_qty
+        )
+        VALUES ($1,$2,$3,$4,$5,0,$6)
+        RETURNING *
+        `,
+        [
+          item.product_id,
+          source,
+          destination,
+          'PURCHASE_RECEIVE',
+          qty,
+          balanceQty,
+        ]
+      );
+
+      movements.push(movement.rows[0]);
+
+      await client.query(
+        `
+        UPDATE purchases.purchase_order_items
+        SET updated_at = NOW()
+        WHERE purchase_order_id = $1
+          AND product_id = $2
+        `,
+        [purchase_order_id, item.product_id]
+      );
+    }
+
+    await client.query(
+      `
+      UPDATE purchases.purchase_order
+      SET status = 'received',
+          updated_at = NOW()
+      WHERE id = $1
+      `,
+      [purchase_order_id]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: 'Stock received successfully',
+      movements,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+export const verifyReceivedPurchaseOrder = async (req, res, next) => {
+  const client = await getClient();
+
+  try {
+    const { id } = req.params;
+    const { items = [], remarks = null } = req.body;
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ message: 'Items are required' });
+    }
+
+    await client.query('BEGIN');
+
+    const poResult = await client.query(
+      `
+      SELECT *
+      FROM purchases.purchase_order
+      WHERE id = $1
+      `,
+      [id]
+    );
+
+    const po = poResult.rows[0];
+
+    if (!po) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        message: 'Purchase order not found',
+      });
+    }
+
+    const currentStatus = String(po.status || '').trim().toLowerCase();
+
+    if (!['received', 'verified'].includes(currentStatus)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        message: `Only received purchase orders can be verified. Current status: ${po.status}`,
       });
     }
 
@@ -158,11 +621,7 @@ export const verifyReceivedPurchaseOrder = async (req, res, next) => {
         WHERE id = $2
           AND purchase_order_id = $3
         `,
-        [
-          Number(item.actual_unit_price),
-          Number(item.id),
-          Number(id),
-        ]
+        [Number(item.actual_unit_price || 0), Number(item.id), Number(id)]
       );
     }
 
@@ -204,424 +663,239 @@ export const verifyReceivedPurchaseOrder = async (req, res, next) => {
   }
 };
 
-export const createPurchaseOrderWithItems = async (req, res, next) => {
+export const addVerifiedPurchaseToInventory = async (req, res, next) => {
   const client = await getClient();
 
   try {
     const {
-      supplier_id,
+      purchase_order_id,
+      purchase_order_item_id = null,
+      product_barcode_id,
+      product_id,
+      batch_id,
+      sku_id,
       warehouse_id,
-      expected_date = null,
-      arrived_date = null,
-      remarks = null,
-      status = 'draft',
-      bill_details = {},
-      items = [],
+      supplier_id,
+      stakeholders_id,
+      qty,
+      no_of_units = 1,
+      unit_price,
+      mfg_date,
+      exp_date,
+      remarks,
     } = req.body;
 
-    if (!supplier_id || !warehouse_id) {
+    if (
+      !purchase_order_id ||
+      !product_barcode_id ||
+      !batch_id ||
+      !sku_id ||
+      !warehouse_id ||
+      !qty ||
+      !exp_date
+    ) {
       return res.status(400).json({
-        message: 'supplier_id and warehouse_id are required',
+        message:
+          'purchase_order_id, product_barcode_id, batch_id, sku_id, warehouse_id, qty and exp_date are required',
       });
     }
 
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({
-        message: 'At least one item is required',
-      });
-    }
-
-    for (const item of items) {
-      const expectedPrice = item.expected_unit_price ?? item.unit_price;
-
-      if (
-        !item.product_id ||
-        !item.brand_id ||
-         !item.category_id ||
-        !item.unit_id ||
-        !item.qty ||
-        expectedPrice === undefined ||
-        expectedPrice === null
-      ) {
-        return res.status(400).json({
-          message:
-            'Each item requires product_id, brand_id, unit_id, qty and expected_unit_price',
-        });
-      }
-    }
+    const units = Number(no_of_units || 1);
+    const purchaseQty = Number(qty || 0);
+    const price = Number(unit_price || 0);
 
     await client.query('BEGIN');
 
-    const totalAmount = items.reduce((sum, item) => {
-      const effectivePrice =
-        item.actual_unit_price !== undefined && item.actual_unit_price !== null
-          ? Number(item.actual_unit_price)
-          : Number(item.expected_unit_price ?? item.unit_price ?? 0);
-
-      return (
-        sum +
-        Number(item.qty || 0) *
-          Number(item.no_of_units || 1) *
-          effectivePrice
-      );
-    }, 0);
-
-    const poNumber = `PO-${Date.now()}-${supplier_id}`;
-
-    const finalBillDetails = {
-      ...bill_details,
-      items: items.map((item) => {
-        const expectedPrice = Number(
-          item.expected_unit_price ?? item.unit_price ?? 0
-        );
-
-        const actualPrice =
-          item.actual_unit_price !== undefined && item.actual_unit_price !== null
-            ? Number(item.actual_unit_price)
-            : null;
-
-        const effectivePrice = actualPrice ?? expectedPrice;
-
-        return {
-          product_id: Number(item.product_id),
-          category_id:Number(item.category_id),
-          brand_id: Number(item.brand_id),
-          unit_id: Number(item.unit_id),
-          qty: Number(item.qty),
-          no_of_units: Number(item.no_of_units || 1),
-          expected_unit_price: expectedPrice,
-          actual_unit_price: actualPrice,
-          total:
-            Number(item.qty) *
-            Number(item.no_of_units || 1) *
-            effectivePrice,
-        };
-      }),
-    };
-
-    const poResult = await client.query(
+    const productResult = await client.query(
       `
-      INSERT INTO purchases.purchase_order
-        (
-          po_number,
-          supplier_id,
+      SELECT
+        pb.id AS product_barcode_id,
+        pb.product_id,
+        pb.category_id,
+        pb.brand_id,
+        pb.unit_id,
+        pb.quantity,
+        pb.barcode,
+        pb.mk_barcode,
+        p.product_code,
+        COALESCE(p.product_name_eng, p.product_name_tel, p.product_code) AS product_name,
+        p."hsn-code" AS hsn_code
+      FROM catalog.product_barcodes pb
+      JOIN catalog.products p ON p.id = pb.product_id
+      WHERE pb.id = $1
+      LIMIT 1
+      `,
+      [Number(product_barcode_id)]
+    );
+
+    const product = productResult.rows[0];
+
+    if (!product) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        message: 'Product barcode row not found',
+      });
+    }
+
+    if (product_id && Number(product_id) !== Number(product.product_id)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        message: 'product_id does not match selected product_barcode_id',
+      });
+    }
+
+    const existing = await client.query(
+      `
+      SELECT *
+      FROM inventory.inventory_products
+      WHERE sku_id = $1
+      LIMIT 1
+      `,
+      [sku_id]
+    );
+
+    let inventoryProduct;
+
+    if (existing.rows.length > 0) {
+      const updated = await client.query(
+        `
+        UPDATE inventory.inventory_products
+        SET count_in_stock = COALESCE(count_in_stock, 0) + $1,
+            no_of_units = COALESCE(no_of_units, 0) + $1,
+            purchase_qty = COALESCE(purchase_qty, 0) + $2,
+            unit_price = $3,
+            warehouse_id = $4,
+            exp_date = $5,
+            mfg_date = $6,
+            remarks = $7,
+            updated_at = NOW()
+        WHERE sku_id = $8
+        RETURNING *
+        `,
+        [
+          units,
+          purchaseQty,
+          price,
+          Number(warehouse_id),
+          exp_date,
+          mfg_date || null,
+          remarks || null,
+          sku_id,
+        ]
+      );
+
+      inventoryProduct = updated.rows[0];
+    } else {
+      const inserted = await client.query(
+        `
+        INSERT INTO inventory.inventory_products (
+          product_barcode_id,
+          product_code,
+          product_name,
+          sku_id,
+          hsn_code,
+          bar_code,
+          batch_id,
+          category_id,
+          brand_id,
+          count_in_stock,
+          no_of_units,
+          stakeholders_id,
+          business_entity_type,
           warehouse_id,
-          expected_date,
-          arrived_date,
-          remarks,
-          status,
-          total_amount,
-          bill_details
+          mfg_date,
+          exp_date,
+          purchase_order_id,
+          purchase_order_item_id,
+          supplier_id,
+          unit_id,
+          purchase_qty,
+          unit_price,
+          verified_by,
+          verified_by_name,
+          remarks
         )
-      VALUES
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+          $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+          $21,$22,$23,$24,$25
+        )
+        RETURNING *
+        `,
+        [
+          Number(product.product_barcode_id),
+          product.product_code,
+          product.product_name,
+          sku_id,
+          product.hsn_code,
+          product.mk_barcode || product.barcode || null,
+          Number(batch_id),
+          product.category_id ? Number(product.category_id) : null,
+          product.brand_id ? Number(product.brand_id) : null,
+          units,
+          units,
+          stakeholders_id || supplier_id
+            ? Number(stakeholders_id || supplier_id)
+            : null,
+          'WAREHOUSE',
+          Number(warehouse_id),
+          mfg_date || null,
+          exp_date,
+          Number(purchase_order_id),
+          purchase_order_item_id ? Number(purchase_order_item_id) : null,
+          supplier_id || stakeholders_id
+            ? Number(supplier_id || stakeholders_id)
+            : null,
+          product.unit_id ? Number(product.unit_id) : null,
+          purchaseQty,
+          price,
+          req.user?.username ||
+            req.user?.name ||
+            req.user?.first_name ||
+            'SYSTEM',
+          req.user?.username ||
+            req.user?.name ||
+            req.user?.first_name ||
+            'SYSTEM',
+          remarks || null,
+        ]
+      );
+
+      inventoryProduct = inserted.rows[0];
+    }
+
+    const stockTransaction = await client.query(
+      `
+      INSERT INTO inventory.stock_transaction (
+        product_id,
+        source,
+        destination,
+        ref_type,
+        qty_in,
+        qty_out,
+        balance_qty
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
       RETURNING *
       `,
       [
-        poNumber,
-        Number(supplier_id),
-        Number(warehouse_id),
-        expected_date,
-        arrived_date,
-        remarks,
-        status,
-        totalAmount,
-        JSON.stringify(finalBillDetails),
+        Number(product.product_id),
+        `PURCHASE_ORDER:${purchase_order_id}`,
+        `WAREHOUSE:${warehouse_id}`,
+        'PURCHASE_VERIFIED',
+        units,
+        0,
+        Number(inventoryProduct.count_in_stock || 0),
       ]
     );
 
-    const purchaseOrder = poResult.rows[0];
-    const insertedItems = [];
-
-    for (const item of items) {
-      const itemResult = await client.query(
-        `
-        INSERT INTO purchases.purchase_order_items
-          (
-            purchase_order_id,
-            product_id,
-            category_id,
-            brand_id,
-            qty,
-            no_of_units,
-            unit_id,
-            expected_unit_price,
-            actual_unit_price
-          )
-        VALUES
-          ($1, $2, $3, $4, $5, $6, $7, $8,$9)
-        RETURNING *
-        `,
-        [
-          purchaseOrder.id,
-          Number(item.product_id),
-          Number(item.category_id),
-          Number(item.brand_id),
-          Number(item.qty),
-          Number(item.no_of_units || 1),
-          Number(item.unit_id),
-          Number(item.expected_unit_price ?? item.unit_price ?? 0),
-          item.actual_unit_price !== undefined && item.actual_unit_price !== null
-            ? Number(item.actual_unit_price)
-            : null,
-        ]
-      );
-
-      insertedItems.push(itemResult.rows[0]);
-    }
-
     await client.query('COMMIT');
 
-    return res.status(201).json({
-      message: 'Purchase order created successfully',
-      purchaseOrder,
-      items: insertedItems,
-    });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    next(error);
-  } finally {
-    client.release();
-  }
-};
-
-export const receivePurchaseOrder = async (req, res, next) => {
-  const client = await getClient();
-  try {
-    const { purchase_order_id, items = [], source = 'supplier', destination = 'warehouse' } = req.body;
-    if (!purchase_order_id || !items.length) {
-      return res.status(400).json({ message: 'purchase_order_id and items are required' });
-    }
-
-    await client.query('BEGIN');
-
-    const movements = [];
-    for (const item of items) {
-      const qty = Number(item.qty_in || item.qty || 0);
-      if (qty <= 0) throw new Error('qty must be greater than 0');
-
-      await client.query(
-        `UPDATE inventory.inventory_products
-         SET count_in_stock = count_in_stock + $1, updated_at = NOW()
-         WHERE id = $2`,
-        [qty, item.product_id]
-      );
-
-      const stock = await client.query(
-        `SELECT count_in_stock FROM inventory.inventory_products WHERE id = $1`,
-        [item.product_id]
-      );
-      const balanceQty = stock.rows[0]?.count_in_stock || 0;
-
-      const movement = await client.query(
-        `INSERT INTO inventory.stock_transaction
-         (product_id, source, destination, ref_type, qty_in, qty_out, balance_qty)
-         VALUES ($1,$2,$3,$4,$5,0,$6) RETURNING *`,
-        [item.product_id, source, destination, 'PURCHASE_RECEIVE', qty, balanceQty]
-      );
-      movements.push(movement.rows[0]);
-
-      await client.query(
-        `UPDATE purchases.purchase_order_items
-         SET updated_at = NOW()
-         WHERE purchase_order_id = $1 AND product_id = $2`,
-        [purchase_order_id, item.product_id]
-      );
-    }
-
-    await client.query(
-      `UPDATE purchases.purchase_order SET status = 'received', updated_at = NOW() WHERE id = $1`,
-      [purchase_order_id]
-    );
-
-    await client.query('COMMIT');
-    res.json({ message: 'Stock received successfully', movements });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    next(err);
-  } finally {
-    client.release();
-  }
-};
-
-export const createDispatchWithItems = async (req, res, next) => {
-  const client = await getClient();
-  try {
-    const { items = [], ...dispatchBody } = req.body;
-    if (!items.length) return res.status(400).json({ message: 'items are required' });
-
-    await client.query('BEGIN');
-
-    const d = await DispatchOrder.create(dispatchBody);
-    const createdItems = [];
-    for (const item of items) {
-      const created = await DispatchOrderItem.create({ ...item, dispatch_order_id: d.id });
-      createdItems.push(created);
-    }
-
-    await client.query('COMMIT');
-    res.status(201).json({ ...d, items: createdItems });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    next(err);
-  } finally {
-    client.release();
-  }
-};
-export const updatePurchaseOrderItems = async (req, res, next) => {
-  const client = await getClient();
-
-  try {
-    const { id } = req.params;
-    const { items = [] } = req.body;
-
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ message: 'Items are required' });
-    }
-
-    await client.query('BEGIN');
-
-    const poResult = await client.query(
-      `SELECT * FROM purchases.purchase_order WHERE id = $1`,
-      [id]
-    );
-
-    const po = poResult.rows[0];
-
-    if (!po) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ message: 'Purchase order not found' });
-    }
-
-    if (String(po.status).toLowerCase() !== 'draft') {
-      await client.query('ROLLBACK');
-      return res.status(400).json({
-        message: 'Items can be edited only in draft status',
-      });
-    }
-
-    for (const item of items) {
-      const expectedPrice = item.expected_unit_price ?? item.unit_price;
-
-      if (
-        !item.product_id ||
-        !item.brand_id ||
-        !item.category_id||
-        !item.unit_id ||
-        !item.qty ||
-        expectedPrice === undefined ||
-        expectedPrice === null
-      ) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          message:
-            'Each item requires product_id, brand_id, unit_id, qty and expected_unit_price',
-        });
-      }
-    }
-
-    await client.query(
-      `DELETE FROM purchases.purchase_order_items WHERE purchase_order_id = $1`,
-      [id]
-    );
-
-    let totalAmount = 0;
-    const insertedItems = [];
-
-    for (const item of items) {
-      const expectedPrice = Number(item.expected_unit_price ?? item.unit_price ?? 0);
-
-      const actualPrice =
-        item.actual_unit_price !== undefined && item.actual_unit_price !== null
-          ? Number(item.actual_unit_price)
-          : null;
-
-      const effectivePrice = actualPrice ?? expectedPrice;
-
-      const lineTotal =
-        Number(item.qty || 0) *
-        Number(item.no_of_units || 1) *
-        effectivePrice;
-
-      totalAmount += lineTotal;
-
-      const itemResult = await client.query(
-        `
-        INSERT INTO purchases.purchase_order_items
-          (
-            purchase_order_id,
-            product_id,
-            category_id,
-            brand_id,
-            qty,
-            no_of_units,
-            unit_id,
-            expected_unit_price,
-            actual_unit_price
-          )
-        VALUES
-          ($1, $2, $3, $4, $5, $6, $7, $8,$9)
-        RETURNING *
-        `,
-        [
-          Number(id),
-          Number(item.product_id),
-          Number(item.category_id),
-          Number(item.brand_id),
-          Number(item.qty),
-          Number(item.no_of_units || 1),
-          Number(item.unit_id),
-          expectedPrice,
-          actualPrice,
-        ]
-      );
-
-      insertedItems.push(itemResult.rows[0]);
-    }
-
-    const finalBillDetails = {
-      ...(po.bill_details || {}),
-      items: insertedItems.map((item) => ({
-        product_id: Number(item.product_id),
-        category_id:Number(item.category_id),
-        brand_id: Number(item.brand_id),
-        unit_id: Number(item.unit_id),
-        qty: Number(item.qty),
-        no_of_units: Number(item.no_of_units || 1),
-        expected_unit_price: Number(item.expected_unit_price || 0),
-        actual_unit_price:
-          item.actual_unit_price !== null && item.actual_unit_price !== undefined
-            ? Number(item.actual_unit_price)
-            : null,
-        total:
-          Number(item.qty || 0) *
-          Number(item.no_of_units || 1) *
-          Number(
-            item.actual_unit_price !== null && item.actual_unit_price !== undefined
-              ? item.actual_unit_price
-              : item.expected_unit_price || 0
-          ),
-      })),
-    };
-
-    const updatedPoResult = await client.query(
-      `
-      UPDATE purchases.purchase_order
-      SET total_amount = $1,
-          bill_details = $2::jsonb,
-          updated_at = NOW()
-      WHERE id = $3
-      RETURNING *
-      `,
-      [totalAmount, JSON.stringify(finalBillDetails), Number(id)]
-    );
-
-    await client.query('COMMIT');
-
-    return res.json({
-      message: 'Purchase order items updated successfully',
-      purchaseOrder: updatedPoResult.rows[0],
-      items: insertedItems,
+    res.status(201).json({
+      message: 'Inventory and stock movement updated successfully',
+      inventoryProduct,
+      total_price: inventoryProduct.total_price,
+      stockTransaction: stockTransaction.rows[0],
     });
   } catch (error) {
     await client.query('ROLLBACK');
