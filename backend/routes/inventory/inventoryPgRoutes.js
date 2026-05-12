@@ -1,21 +1,21 @@
 import express from 'express';
 
 import {
-  InventoryProduct,
-  StockTransaction,
-} from '../../models/inventory/inventoryProductModels.js';
-
-import {
-  list,
-  getById,
-  create,
-  update,
-  remove,
-} from '../../controllers/inventory/crudController.js';
+  getInventoryProducts,
+  getInventoryProductById,
+  createInventoryProduct,
+  updateInventoryProduct,
+  deleteInventoryProduct,
+  getStockTransactions,
+  getStockTransactionById,
+  createStockTransaction,
+  updateStockTransaction,
+  deleteStockTransaction,
+  addVerifiedPurchaseToInventory,
+} from '../../controllers/inventory/inventoryProductController.js';
 
 import {
   receivePurchaseOrder,
-  addVerifiedPurchaseToInventory,
 } from '../../controllers/inventory/supplyController.js';
 
 import {
@@ -25,33 +25,32 @@ import {
 
 const router = express.Router();
 
-
-// 🔒 Apply security
 router.use(protectPOS);
 router.use(catalogInventoryAccess);
 
-
 // 📦 Inventory Products
-router.route('/products')
-  .get(list(InventoryProduct))
-  .post(create(InventoryProduct));
+router
+  .route('/products')
+  .get(getInventoryProducts)
+  .post(createInventoryProduct);
 
-router.route('/products/:id')
-  .get(getById(InventoryProduct))
-  .put(update(InventoryProduct))
-  .delete(remove(InventoryProduct));
-
+router
+  .route('/products/:id')
+  .get(getInventoryProductById)
+  .put(updateInventoryProduct)
+  .delete(deleteInventoryProduct);
 
 // 🔄 Stock Transactions
-router.route('/stock-transactions')
-  .get(list(StockTransaction))
-  .post(create(StockTransaction));
+router
+  .route('/stock-transactions')
+  .get(getStockTransactions)
+  .post(createStockTransaction);
 
-router.route('/stock-transactions/:id')
-  .get(getById(StockTransaction))
-  .put(update(StockTransaction))
-  .delete(remove(StockTransaction));
-
+router
+  .route('/stock-transactions/:id')
+  .get(getStockTransactionById)
+  .put(updateStockTransaction)
+  .delete(deleteStockTransaction);
 
 // 📥 Receive PO → basic stock update
 router.post('/receive-purchase-order', receivePurchaseOrder);
