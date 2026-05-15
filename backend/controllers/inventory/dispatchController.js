@@ -9,7 +9,6 @@ const generateDispatchNo = () => {
 
 const toPgDate = (value) => {
   if (!value) return null;
-
   const match = String(value).trim().match(/(\d{4})-(\d{2})-(\d{2})/);
   return match ? match[0] : null;
 };
@@ -88,9 +87,7 @@ const hydrateDispatchItemsFromBarcodes = async (client, items = []) => {
       product_barcode_id: Number(barcodeInfo.product_barcode_id),
       product_id: Number(barcodeInfo.product_id),
       brand_id: barcodeInfo.brand_id ? Number(barcodeInfo.brand_id) : null,
-      category_id: barcodeInfo.category_id
-        ? Number(barcodeInfo.category_id)
-        : null,
+      category_id: barcodeInfo.category_id ? Number(barcodeInfo.category_id) : null,
       unit_id: barcodeInfo.unit_id ? Number(barcodeInfo.unit_id) : null,
       qty: units,
       no_of_units: units,
@@ -180,7 +177,8 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
   const allowedStatuses = [
     'draft',
     'sent',
-    'received',
+    'packed',
+    'dispatched',
     'received_to_outlet',
     'cancelled',
   ];
@@ -212,12 +210,32 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
       throw new Error('Dispatch order not found');
     }
 
-    if (existing.dispatch_status === 'sent' && dispatch_status === 'sent') {
+    if (existing.dispatch_status === 'received_to_outlet') {
       res.status(400);
-      throw new Error('Dispatch already sent');
+      throw new Error('Received dispatch cannot be changed');
     }
 
-    if (dispatch_status === 'sent' && existing.dispatch_status !== 'sent') {
+    if (dispatch_status === 'sent' && existing.dispatch_status !== 'draft') {
+      res.status(400);
+      throw new Error('Only draft dispatch can be marked sent');
+    }
+
+    if (dispatch_status === 'packed' && existing.dispatch_status !== 'sent') {
+      res.status(400);
+      throw new Error('Only sent dispatch can be marked packed');
+    }
+
+    if (dispatch_status === 'dispatched' && existing.dispatch_status !== 'packed') {
+      res.status(400);
+      throw new Error('Only packed dispatch can be marked dispatched');
+    }
+
+    if (dispatch_status === 'received_to_outlet') {
+      res.status(400);
+      throw new Error('Use receive-to-outlet endpoint to receive dispatch');
+    }
+
+    if (dispatch_status === 'dispatched') {
       const itemsResult = await client.query(
         `
         SELECT
@@ -294,7 +312,7 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
           SET
             no_of_units = COALESCE(no_of_units, 0) - $1,
             count_in_stock = COALESCE(count_in_stock, 0) - $1,
-            updated_at = now()
+            updated_at = NOW()
           WHERE id = $2
           `,
           [dispatchUnits, Number(inventoryProduct.id)]
@@ -317,13 +335,41 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
             Number(item.barcode_product_id),
             existing.source || 'INVENTORY',
             existing.destination || 'DISPATCH',
-            'INVENTORY_DISPATCH_SENT',
+            'INVENTORY_DISPATCH_OUT',
             0,
             dispatchUnits,
             newBalance,
           ]
         );
       }
+
+      await client.query(
+        `
+        INSERT INTO inventory.transit_products (
+          dispatch_order_id,
+          transit_status
+        )
+        VALUES ($1, 'intransit')
+        ON CONFLICT (dispatch_order_id)
+        DO UPDATE SET
+          transit_status = 'intransit',
+          updated_at = NOW()
+        `,
+        [Number(req.params.id)]
+      );
+    }
+
+    if (dispatch_status === 'cancelled') {
+      await client.query(
+        `
+        UPDATE inventory.transit_products
+        SET
+          transit_status = 'cancelled',
+          updated_at = NOW()
+        WHERE dispatch_order_id = $1
+        `,
+        [Number(req.params.id)]
+      );
     }
 
     const updatedResult = await client.query(
@@ -331,7 +377,7 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
       UPDATE dispatch.dispatch_order
       SET
         dispatch_status = $1,
-        updated_at = now()
+        updated_at = NOW()
       WHERE id = $2
       RETURNING *
       `,
@@ -350,7 +396,7 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
 });
 
 export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) => {
-  const dispatchOrderId = req.params.id;
+  const dispatchOrderId = Number(req.params.id);
 
   const client = await pool.connect();
 
@@ -379,12 +425,39 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       throw new Error('Dispatch already received to outlet');
     }
 
+    if (dispatchOrder.dispatch_status !== 'dispatched') {
+      res.status(400);
+      throw new Error('Only dispatched orders can be received to outlet');
+    }
+
     const destinationParts = String(dispatchOrder.destination || '').split(':');
     const destinationType = destinationParts[0];
 
     if (destinationType !== 'outlet') {
       res.status(400);
       throw new Error('Only outlet dispatch can update outlet Mongo stock');
+    }
+
+    const transitResult = await client.query(
+      `
+      SELECT *
+      FROM inventory.transit_products
+      WHERE dispatch_order_id = $1
+      FOR UPDATE
+      `,
+      [dispatchOrderId]
+    );
+
+    const transit = transitResult.rows[0];
+
+    if (!transit) {
+      res.status(400);
+      throw new Error('Transit entry not found for this dispatch');
+    }
+
+    if (transit.transit_status !== 'intransit') {
+      res.status(400);
+      throw new Error(`Transit status must be intransit. Current: ${transit.transit_status}`);
     }
 
     const itemsResult = await client.query(
@@ -469,6 +542,17 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
 
       await product.save();
     }
+
+    await client.query(
+      `
+      UPDATE inventory.transit_products
+      SET
+        transit_status = 'reached',
+        updated_at = NOW()
+      WHERE dispatch_order_id = $1
+      `,
+      [dispatchOrderId]
+    );
 
     const updatedOrderResult = await client.query(
       `

@@ -8,40 +8,40 @@ import {
 export const getInventoryProducts = asyncHandler(async (req, res) => {
   const rows = await InventoryProduct.findAll();
 
-  console.log('================ INVENTORY PRODUCTS API RESPONSE ================');
+  // console.log('================ INVENTORY PRODUCTS API RESPONSE ================');
 
-  console.table(
-    rows.map((row, index) => ({
-      idx: index,
-      id: row.id,
-      product_barcode_id: row.product_barcode_id,
-      product_code: row.product_code,
-      product_name: row.product_name,
-      exp_date: row.exp_date,
-      mfg_date: row.mfg_date,
-      no_of_units: row.no_of_units,
-      warehouse_id: row.warehouse_id,
-      mk_barcode: row.mk_barcode,
-      brand_name_english: row.brand_name_english,
-      category_name_english: row.category_name_english,
-      unit_short_code: row.unit_short_code,
-    }))
-  );
+  // console.table(
+  //   rows.map((row, index) => ({
+  //     idx: index,
+  //     id: row.id,
+  //     product_barcode_id: row.product_barcode_id,
+  //     product_code: row.product_code,
+  //     product_name: row.product_name,
+  //     exp_date: row.exp_date,
+  //     mfg_date: row.mfg_date,
+  //     no_of_units: row.no_of_units,
+  //     warehouse_id: row.warehouse_id,
+  //     mk_barcode: row.mk_barcode,
+  //     brand_name_english: row.brand_name_english,
+  //     category_name_english: row.category_name_english,
+  //     unit_short_code: row.unit_short_code,
+  //   }))
+  // );
 
-  console.log(
-    JSON.stringify(
-      rows.map((row, index) => ({
-        idx: index,
-        id: row.id,
-        exp_date: row.exp_date,
-        mfg_date: row.mfg_date,
-      })),
-      null,
-      2
-    )
-  );
+  // console.log(
+  //   JSON.stringify(
+  //     rows.map((row, index) => ({
+  //       idx: index,
+  //       id: row.id,
+  //       exp_date: row.exp_date,
+  //       mfg_date: row.mfg_date,
+  //     })),
+  //     null,
+  //     2
+  //   )
+  // );
 
-  console.log('================================================================');
+  // console.log('================================================================');
 
   res.json(rows);
 });

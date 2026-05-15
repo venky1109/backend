@@ -76,7 +76,7 @@ export const addFinancialToPOSProduct = async (req, res) => {
 export const updatePOSProductFinancial = async (req, res) => {
   try {
     const { productId, detailId, financialId, updateFields } = req.body;
-    console.log('123'+JSON.stringify(req.body))
+    // console.log('123'+JSON.stringify(req.body))
 
     if (!productId || !detailId || !financialId || !updateFields)
       return res.status(400).json({ error: 'Missing required fields' });
@@ -90,7 +90,7 @@ export const updatePOSProductFinancial = async (req, res) => {
     const financial = detail.financials.id(financialId);
     if (!financial) return res.status(404).json({ error: 'Financial variant not found' });
 
-    console.log(financial)
+    // console.log(financial)
 
     Object.assign(financial, updateFields);
     await product.save();
