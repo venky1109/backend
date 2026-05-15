@@ -1,6 +1,7 @@
 
 import Product from '../models/productModel.js';
 import mongoose from 'mongoose';
+import { assignFinancialMkIds, findFinancialByMkid } from '../utils/financialMkid.js';
 
 export const createPOSProductFromCatalog = async (req, res) => {
   try {
@@ -118,17 +119,20 @@ export const getPOSProductByBarcode = async (req, res) => {
     // // console.log('123', product);
 
     const { barcode } = req.params;
-// console.log('123 ' + barcode);
+    // console.log('123 ' + barcode);
 
-// Assuming barcode is a string with multiple barcodes separated by commas
-const barcodesArray = barcode.split(',');
+    await assignFinancialMkIds(Product);
 
-// Check if the first barcode in the array exists in the product's financial details
-const product = await Product.findOne({
-  "details.financials.barcode": { $in: [barcodesArray[0]] }  // Check if the first barcode is in the array
-});
+    // Assuming barcode is a string with multiple barcodes separated by commas
+    const barcodesArray = barcode.split(',');
+    const barcodeToFind = barcodesArray[0];
 
-// console.log('Found product:', product);
+    // Check if the first barcode in the array exists in the product's financial details
+    const product = await Product.findOne({
+      "details.financials.barcode": { $in: [barcodeToFind] }  // Check if the first barcode is in the array
+    });
+
+    // console.log('Found product:', product);
 
     if (!product) {
       return res.status(404).json({ error: "Product with barcode not found" });
@@ -136,7 +140,7 @@ const product = await Product.findOne({
 
     // Find the detail with the matching barcode
     const detail = product.details.find((d) =>
-      d.financials.some((f) => f.barcode.includes([barcodesArray[0]]))  // Check if barcode exists in the array
+      d.financials.some((f) => f.barcode.includes(barcodeToFind))  // Check if barcode exists in the array
     );
 
     if (!detail) {
@@ -144,7 +148,9 @@ const product = await Product.findOne({
     }
 
     // Find the financial entry with the matching barcode
-    const financial = detail.financials.find((f) => f.barcode.includes([barcodesArray[0]]));
+    const financial = detail.financials.find((f) => f.barcode.includes(barcodeToFind));
+    const price = Number(financial.price || 0);
+    const dprice = Number(financial.dprice || 0);
 
     const response = {
       id: product._id,
@@ -153,6 +159,7 @@ const product = await Product.findOne({
       brand: detail.brand,
       brandId: detail._id,
       financialId: financial._id,
+      mkid: financial.mkid,
       MRP: financial.price,
       dprice: financial.dprice,
       quantity: financial.quantity,
@@ -160,7 +167,7 @@ const product = await Product.findOne({
       units: financial.units,
       image: detail.images?.[0]?.image || null,
       catalogQuantity: financial.quantity,
-      discount: Math.round(((financial.price - financial.dprice) / financial.price) * 100),
+      discount: price > 0 ? Math.round(((price - dprice) / price) * 100) : 0,
       qty: 1,
       barcode: financial.barcode  // Return the barcode as an array
     };
@@ -170,6 +177,46 @@ const product = await Product.findOne({
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Failed to fetch product by barcode" });
+  }
+};
+
+// @desc Get product by MKID typed by cashier
+export const getPOSProductByMkid = async (req, res) => {
+  try {
+    const found = await findFinancialByMkid(Product, req.params.mkid);
+
+    if (!found) {
+      return res.status(404).json({ error: "Product with MKID not found" });
+    }
+
+    const { product, detail, financial } = found;
+    const price = Number(financial.price || 0);
+    const dprice = Number(financial.dprice || 0);
+
+    const response = {
+      id: product._id,
+      productName: product.name,
+      category: product.category,
+      brand: detail.brand,
+      brandId: detail._id,
+      financialId: financial._id,
+      mkid: financial.mkid,
+      MRP: financial.price,
+      dprice: financial.dprice,
+      quantity: financial.quantity,
+      countInStock: financial.countInStock,
+      units: financial.units,
+      image: detail.images?.[0]?.image || null,
+      catalogQuantity: financial.quantity,
+      discount: price > 0 ? Math.round(((price - dprice) / price) * 100) : 0,
+      qty: 1,
+      barcode: financial.barcode,
+    };
+
+    return res.status(200).json(response);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Failed to fetch product by MKID" });
   }
 };
 

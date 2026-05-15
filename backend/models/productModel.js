@@ -3,6 +3,7 @@ import slugify from 'slugify';
 
 // Define a schema for the financial details
 const financialSchema = new mongoose.Schema({
+  mkid: { type: Number, index: true },
   price: { type: Number, required: true },
   dprice: { type: Number, required: true },
   Discount: { type: Number, required: true },

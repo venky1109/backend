@@ -1,5 +1,6 @@
 import asyncHandler from '../middleware/asyncHandler.js';
 import Product from '../models/productModel.js';
+import { assignFinancialMkIds } from '../utils/financialMkid.js';
 
 // @desc    Fetch all products
 // @route   GET /api/products
@@ -20,8 +21,11 @@ const getProducts = asyncHandler(async (req, res) => {
       }
     : {};
 
+  await assignFinancialMkIds(Product);
+
   const count = await Product.countDocuments({ ...keyword });
   const products = await Product.find({ ...keyword })
+    .sort({ category: 1, name: 1 })
     .limit(pageSize)
     .skip(pageSize * (page - 1));
 
@@ -64,8 +68,11 @@ export const getProductsByCategory = asyncHandler(async (req, res) => {
     const pageSize = Number(process.env.PAGINATION_LIMIT) || 10; // Default page size if not set
     const page = Number(req.query.pageNumber) || 1; // Default to page 1 if not specified
 
+    await assignFinancialMkIds(Product);
+
     // Find products by category
     const products = await Product.find({ category })
+      .sort({ name: 1 })
       .limit(pageSize) // Limit number of products per page
       .skip(pageSize * (page - 1)); // Skip products for previous pages
 
@@ -105,6 +112,8 @@ const getProductBySlug = asyncHandler(async (req, res) => {
   // console.log("Incoming Request Params:", req.params);  // ✅ Debugging log
 
   // Find the product by slug instead of ID
+  await assignFinancialMkIds(Product);
+
   const product = await Product.findOne({ slug: req.params.slug });
 
   if (product) {
@@ -229,6 +238,8 @@ const getFinancialDetails = async (req, res) => {
   const { productId, id: detailId, financialId } = req.params; // Destructure params
 
   try {
+    await assignFinancialMkIds(Product);
+
     // Find the product by productId
     const product = await Product.findById(productId);
 
@@ -269,6 +280,8 @@ const getBatchFinancialDetails = async (req, res) => {
       return res.status(400).json({ message: 'Invalid request, items array is required' });
     }
 
+    await assignFinancialMkIds(Product);
+
     // Fetch the financial details for the items in the batch
     const financialDetails = await Promise.all(
       items.map(async (item) => {
@@ -296,6 +309,7 @@ const getBatchFinancialDetails = async (req, res) => {
             productId: item.productId,
             detailId: item.detailId,
             financialId: item.financialId,
+            mkid: financial.mkid,
             price: financial.price,
             dprice: financial.dprice,
             discount:  financial.Discount, // Handle both possible naming conventions
@@ -495,6 +509,8 @@ const createProductReview = asyncHandler(async (req, res) => {
 // @route   GET /api/products/top
 // @access  Public
 const getTopProducts = asyncHandler(async (req, res) => {
+  await assignFinancialMkIds(Product);
+
   const products = await Product.find({}).sort({ rating: -1 }).limit(3);
 
   res.json(products);

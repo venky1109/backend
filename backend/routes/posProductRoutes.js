@@ -3,7 +3,8 @@ import {
   createPOSProductFromCatalog,
   addFinancialToPOSProduct,
   updatePOSProductFinancial,
-    getPOSProductByBarcode
+  getPOSProductByBarcode,
+  getPOSProductByMkid,
 } from '../controllers/POSProductController.js';
 
 import { protectPOS, isAdminOrInventory, allowAllRoles } from '../middleware/posAuthMiddleware.js';
@@ -17,6 +18,7 @@ router.use(protectPOS);
 router.post('/create-from-catalog', isAdminOrInventory, createPOSProductFromCatalog);
 router.post('/add-financial', isAdminOrInventory, addFinancialToPOSProduct);
 router.put('/update-financial', isAdminOrInventory, updatePOSProductFinancial);
+router.get('/mkid/:mkid', protectPOS, allowAllRoles, getPOSProductByMkid);
 router.get('/barcode/:barcode', protectPOS, allowAllRoles, getPOSProductByBarcode);
 // router.get('/barcode/:barcode', getPOSProductByBarcode);
 
