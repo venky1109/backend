@@ -315,13 +315,15 @@ export const InventoryDashboard = {
       SELECT
         ip.product_barcode_id,
         COALESCE(p.product_name_eng, p.product_name_tel, p.product_code) AS name,
+        b.brand_name_english AS brand,
         MIN(ip.created_at) AS created_at,
         SUM(COALESCE(ip.count_in_stock, ip.no_of_units, 0)) AS stock_count
       FROM inventory.inventory_products ip
       LEFT JOIN catalog.product_barcodes pb ON pb.id = ip.product_barcode_id
       LEFT JOIN catalog.products p ON p.id = pb.product_id
+      LEFT JOIN catalog.brands b ON b.id = pb.brand_id
       WHERE ip.created_at BETWEEN $1 AND $2
-      GROUP BY ip.product_barcode_id, p.product_name_eng, p.product_name_tel, p.product_code
+      GROUP BY ip.product_barcode_id, p.product_name_eng, p.product_name_tel, p.product_code, b.brand_name_english
       ORDER BY created_at DESC
       LIMIT $3
       `,
@@ -331,6 +333,7 @@ export const InventoryDashboard = {
     return rows.map((row) => ({
       productBarcodeId: row.product_barcode_id,
       name: row.name,
+      brand: row.brand,
       createdAt: row.created_at,
       stockCount: Number(row.stock_count || 0),
     }));
