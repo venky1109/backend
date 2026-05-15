@@ -20,9 +20,6 @@ const getDateRange = ({ from, to, days = 7 } = {}) => {
   return { startDate, endDate };
 };
 
-const getObjectIdFromDate = (date) =>
-  mongoose.Types.ObjectId.createFromTime(Math.floor(date.getTime() / 1000));
-
 const getOrderMatch = (startDate, endDate, outlet) => {
   const match = {
     createdAt: { $gte: startDate, $lte: endDate },
@@ -293,20 +290,33 @@ export const InventoryDashboard = {
     }));
   },
 
-  async getNewOutletProducts({ startDate, limit = 25 }) {
-    const products = await Product.find({ _id: { $gte: getObjectIdFromDate(startDate) } })
-      .select('name category details')
-      .sort({ _id: -1 })
+  async getNewOutletProducts({ startDate, endDate, limit = 25 }) {
+    const products = await Product.find({
+      createdAt: { $gte: startDate, $lte: endDate },
+    })
+      .select('name category details createdAt')
+      .sort({ createdAt: -1 })
       .limit(Number(limit))
       .lean();
 
-    return products.map((product) => ({
-      productId: String(product._id),
-      name: product.name,
-      category: product.category,
-      createdAt: product._id.getTimestamp(),
-      brandCount: product.details?.length || 0,
-    }));
+    return products.map((product) => {
+      const brands = [
+        ...new Set(
+          (product.details || [])
+            .map((detail) => detail.brand)
+            .filter(Boolean)
+        ),
+      ];
+
+      return {
+        productId: String(product._id),
+        name: product.name,
+        category: product.category,
+        brand: brands.join(', ') || null,
+        createdAt: product.createdAt,
+        brandCount: product.details?.length || 0,
+      };
+    });
   },
 
   async getNewWarehouseProducts({ startDate, endDate, limit = 25 }) {
@@ -315,15 +325,17 @@ export const InventoryDashboard = {
       SELECT
         ip.product_barcode_id,
         COALESCE(p.product_name_eng, p.product_name_tel, p.product_code) AS name,
+        c.category_name_english AS category,
         b.brand_name_english AS brand,
         MIN(ip.created_at) AS created_at,
         SUM(COALESCE(ip.count_in_stock, ip.no_of_units, 0)) AS stock_count
       FROM inventory.inventory_products ip
       LEFT JOIN catalog.product_barcodes pb ON pb.id = ip.product_barcode_id
       LEFT JOIN catalog.products p ON p.id = pb.product_id
+      LEFT JOIN catalog.categories c ON c.id = pb.category_id
       LEFT JOIN catalog.brands b ON b.id = pb.brand_id
       WHERE ip.created_at BETWEEN $1 AND $2
-      GROUP BY ip.product_barcode_id, p.product_name_eng, p.product_name_tel, p.product_code, b.brand_name_english
+      GROUP BY ip.product_barcode_id, p.product_name_eng, p.product_name_tel, p.product_code, c.category_name_english, b.brand_name_english
       ORDER BY created_at DESC
       LIMIT $3
       `,
@@ -333,6 +345,7 @@ export const InventoryDashboard = {
     return rows.map((row) => ({
       productBarcodeId: row.product_barcode_id,
       name: row.name,
+      category: row.category,
       brand: row.brand,
       createdAt: row.created_at,
       stockCount: Number(row.stock_count || 0),
