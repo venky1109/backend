@@ -406,6 +406,13 @@ export const InventoryDashboard = {
   async getOrderSummary({ startDate, endDate, outlet }) {
     const match = getOrderMatch(startDate, endDate, outlet);
 
+    const topOrders = await Order.find(match)
+      .select('orderId MK_order_id totalPrice user createdAt')
+      .sort({ totalPrice: -1 })
+      .limit(5)
+      .populate('user', '_id phoneNo name')
+      .lean();
+
     const [outletSummary = {}] = await Order.aggregate([
       { $match: match },
       {
@@ -474,6 +481,12 @@ export const InventoryDashboard = {
           outlet: item._id,
           totalOrders: item.totalOrders,
           totalAmount: roundMoney(item.totalAmount),
+        })),
+        topOrders: topOrders.map((order) => ({
+          orderId: order.orderId || order.MK_order_id || String(order._id),
+          phoneNo: order.user?.phoneNo || '',
+          amount: roundMoney(order.totalPrice),
+          createdAt: order.createdAt,
         })),
       },
       warehouse: {
