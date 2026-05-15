@@ -130,6 +130,7 @@ export const InventoryDashboard = {
         doi.product_barcode_id,
         COALESCE(p.product_name_eng, p.product_name_tel, p.product_code) AS name,
         b.brand_name_english AS brand,
+        pb.quantity AS pack_quantity,
         u.unit_short_code AS units,
         SUM(COALESCE(doi.no_of_units, doi.qty, 0)) AS total_qty,
         SUM(COALESCE(doi.no_of_units, doi.qty, 0) * COALESCE(ip.unit_price, 0)) AS dispatch_value,
@@ -142,29 +143,47 @@ export const InventoryDashboard = {
         WHERE ip.product_barcode_id = doi.product_barcode_id
           AND ip.exp_date::date = doi.exp_date::date
       ) ip ON true
+      LEFT JOIN catalog.product_barcodes pb ON pb.id = doi.product_barcode_id
       LEFT JOIN catalog.products p ON p.id = doi.product_id
       LEFT JOIN catalog.brands b ON b.id = doi.brand_id
-      LEFT JOIN catalog.units u ON u.id = doi.unit_id
+      LEFT JOIN catalog.units u ON u.id = COALESCE(pb.unit_id, doi.unit_id)
       WHERE d.created_at BETWEEN $1 AND $2
         AND d.dispatch_status IN ('dispatched', 'received_to_outlet')
-      GROUP BY doi.product_id, doi.product_barcode_id, name, brand, units
+      GROUP BY doi.product_id, doi.product_barcode_id, name, brand, pb.quantity, units
       ORDER BY total_qty DESC, dispatch_value DESC, name ASC
       LIMIT $3
       `,
       [startDate, endDate, Number(limit)]
     );
 
-    return rows.map((row, index) => ({
-      rank: index + 1,
-      productId: row.product_id,
-      productBarcodeId: row.product_barcode_id,
-      name: row.name,
-      brand: row.brand,
-      units: row.units,
-      totalQty: Number(row.total_qty || 0),
-      dispatchValue: roundMoney(row.dispatch_value),
-      orderCount: Number(row.order_count || 0),
-    }));
+    return rows.map((row, index) => {
+      const packQuantity =
+        row.pack_quantity === null || row.pack_quantity === undefined
+          ? null
+          : Number(row.pack_quantity);
+      const weight =
+        packQuantity === null
+          ? null
+          : `${packQuantity} ${row.units || ''}`.trim();
+
+      return {
+        rank: index + 1,
+        productId: row.product_id,
+        productBarcodeId: row.product_barcode_id,
+        name: row.name,
+        brand: row.brand,
+        packQuantity,
+        pack_quantity: packQuantity,
+        barcodeQuantity: packQuantity,
+        barcode_quantity: packQuantity,
+        quantity: packQuantity,
+        units: row.units,
+        weight,
+        totalQty: Number(row.total_qty || 0),
+        dispatchValue: roundMoney(row.dispatch_value),
+        orderCount: Number(row.order_count || 0),
+      };
+    });
   },
 
   async getOutletProductsRequiringOrder({ startDate, endDate, outlet }) {

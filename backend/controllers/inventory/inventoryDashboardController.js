@@ -19,6 +19,35 @@ const getBaseParams = (req) => {
   };
 };
 
+const normalizeWarehouseTopProducts = (products = []) =>
+  products.map((product) => {
+    const rawPackQuantity =
+      product.packQuantity ??
+      product.pack_quantity ??
+      product.barcodeQuantity ??
+      product.barcode_quantity ??
+      product.quantity ??
+      null;
+    const packQuantity =
+      rawPackQuantity === null || rawPackQuantity === undefined
+        ? null
+        : Number(rawPackQuantity);
+    const units = product.units || '';
+    const weight =
+      product.weight ||
+      (packQuantity === null ? null : `${packQuantity} ${units}`.trim());
+
+    return {
+      ...product,
+      packQuantity,
+      pack_quantity: packQuantity,
+      barcodeQuantity: packQuantity,
+      barcode_quantity: packQuantity,
+      quantity: packQuantity,
+      weight,
+    };
+  });
+
 export const getInventoryDashboardSummary = asyncHandler(async (req, res) => {
   const params = getBaseParams(req);
 
@@ -47,6 +76,8 @@ export const getInventoryDashboardSummary = asyncHandler(async (req, res) => {
     InventoryDashboard.getCustomerSummary(params),
     InventoryDashboard.getFinanceSummary(params),
   ]);
+  const normalizedWarehouseTopProducts =
+    normalizeWarehouseTopProducts(warehouseTopProducts);
 
   res.json({
     range: {
@@ -59,7 +90,7 @@ export const getInventoryDashboardSummary = asyncHandler(async (req, res) => {
     },
     products: {
       outletTopProducts,
-      warehouseTopProducts,
+      warehouseTopProducts: normalizedWarehouseTopProducts,
       outletProductsRequiringOrder,
       warehouseProductsRequiringOrder,
       newOutletProducts,
@@ -71,6 +102,7 @@ export const getInventoryDashboardSummary = asyncHandler(async (req, res) => {
     customers,
     finance,
     recommendedSections: {
+      dashboardBuild: 'inventory-dashboard-pack-fields-v2',
       stockHealth: {
         outletOutOfStockCount: outletOutOfStockProducts.length,
         warehouseOutOfStockCount: warehouseOutOfStockProducts.length,
@@ -103,10 +135,13 @@ export const getInventoryDashboardProducts = asyncHandler(async (req, res) => {
     InventoryDashboard.getOutletOutOfStockProducts({ limit: Number(req.query.stockLimit || 100) }),
     InventoryDashboard.getWarehouseOutOfStockProducts({ limit: Number(req.query.stockLimit || 100) }),
   ]);
+  const normalizedWarehouseTopProducts =
+    normalizeWarehouseTopProducts(warehouseTopProducts);
 
   res.json({
+    dashboardBuild: 'inventory-dashboard-pack-fields-v3',
     outletTopProducts,
-    warehouseTopProducts,
+    warehouseTopProducts: normalizedWarehouseTopProducts,
     outletProductsRequiringOrder,
     warehouseProductsRequiringOrder,
     newOutletProducts,
