@@ -22,6 +22,7 @@ import {
   updateOrdersToPaidWithTimers,
   getFilteredPOSOrders,
   getPOSOrderDetails,
+  getTopProductsReportPOS,
 } from '../controllers/orderPOSController.js';
 import { protect, admin } from '../middleware/authMiddleware.js';
 // import { protectPOS } from '../middleware/posAuthMiddleware.js';
@@ -57,6 +58,7 @@ router.put('/pos/:id/mark-dispatched', posProtect, dispatchAgent, updateOrdersTo
 router.put('/pos/:id/mark-delivered', posProtect, deliveryAgent, updateOrdersToDeliveredWithTimers);
 
 router.put('/pos/:id/mark-paid', posProtect, deliveryAgent, updateOrdersToPaidWithTimers);
+router.get('/pos/reports/top-products', posProtect, cashierOrAdmin, getTopProductsReportPOS);
 router.get('/pos/orders/search', posProtect, cashierOrAdmin, getFilteredPOSOrders);
 router.get('/pos/orders/details/:id', posProtect, cashierOrAdmin, getPOSOrderDetails);
 

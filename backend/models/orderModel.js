@@ -16,6 +16,19 @@ const orderSchema = mongoose.Schema(
         qty: { type: Number, required: true },
         image: { type: String, required: true },
         price: { type: Number, required: true },
+        productId: {
+          type: mongoose.Schema.Types.ObjectId,
+        },
+        brandId: {
+          type: mongoose.Schema.Types.ObjectId,
+        },
+        financialId: {
+          type: mongoose.Schema.Types.ObjectId,
+        },
+        barcode: {
+          type: [String],
+          default: [],
+        },
         product: {
           type: mongoose.Schema.Types.ObjectId,
           required: true,

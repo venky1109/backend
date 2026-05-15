@@ -157,6 +157,10 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
       qty: item.qty,
       image: item.image,
       price: finance.dprice,
+      productId: product._id,
+      brandId: detail._id,
+      financialId: finance._id,
+      barcode: finance.barcode || [],
       product: product._id,
     };
   });
@@ -346,6 +350,121 @@ const getPOSOrderDetails = asyncHandler(async (req, res) => {
     paymentMethod:order.paymentMethod||'',
     source: order.source || '',
     items,
+  });
+});
+
+// ------------------------------------
+// POS / ADMIN: Top Products Report
+// ------------------------------------
+const getTopProductsReportPOS = asyncHandler(async (req, res) => {
+  const rawDays = Number(req.query.days || 30);
+  const rawLimit = Number(req.query.limit || 150);
+
+  const days = Number.isFinite(rawDays)
+    ? Math.min(Math.max(Math.floor(rawDays), 1), 3650)
+    : 30;
+  const limit = Number.isFinite(rawLimit)
+    ? Math.min(Math.max(Math.floor(rawLimit), 1), 500)
+    : 150;
+
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+
+  const accessFilter = buildPOSAccessFilter(req.user);
+  const match = {
+    ...accessFilter,
+    createdAt: { $gte: startDate },
+  };
+
+  const products = await Order.aggregate([
+    { $match: match },
+    { $unwind: '$orderItems' },
+    {
+      $group: {
+        _id: {
+          productId: { $ifNull: ['$orderItems.productId', '$orderItems.product'] },
+          brandId: '$orderItems.brandId',
+          financialId: '$orderItems.financialId',
+          name: '$orderItems.name',
+          brand: '$orderItems.brand',
+          quantity: '$orderItems.quantity',
+          units: '$orderItems.units',
+        },
+        productId: { $first: { $ifNull: ['$orderItems.productId', '$orderItems.product'] } },
+        brandId: { $first: '$orderItems.brandId' },
+        financialId: { $first: '$orderItems.financialId' },
+        name: { $first: '$orderItems.name' },
+        brand: { $first: '$orderItems.brand' },
+        quantity: { $first: '$orderItems.quantity' },
+        units: { $first: '$orderItems.units' },
+        image: { $first: '$orderItems.image' },
+        totalQty: { $sum: { $ifNull: ['$orderItems.qty', 0] } },
+        totalRevenue: {
+          $sum: {
+            $multiply: [
+              { $ifNull: ['$orderItems.qty', 0] },
+              { $ifNull: ['$orderItems.price', 0] },
+            ],
+          },
+        },
+        orderCount: { $sum: 1 },
+      },
+    },
+    { $sort: { totalQty: -1, totalRevenue: -1, name: 1 } },
+    { $limit: limit },
+    {
+      $project: {
+        _id: 0,
+        productId: { $toString: '$productId' },
+        brandId: {
+          $cond: [{ $ifNull: ['$brandId', false] }, { $toString: '$brandId' }, ''],
+        },
+        financialId: {
+          $cond: [{ $ifNull: ['$financialId', false] }, { $toString: '$financialId' }, ''],
+        },
+        name: 1,
+        brand: 1,
+        quantity: 1,
+        units: 1,
+        image: 1,
+        totalQty: 1,
+        totalRevenue: { $round: ['$totalRevenue', 2] },
+        orderCount: 1,
+      },
+    },
+  ]);
+
+  const rankedProducts = products.map((product, index) => ({
+    ...product,
+    rank: index + 1,
+    productName: product.name,
+    weight: `${product.quantity || ''} ${product.units || ''}`.trim(),
+    qtySold: product.totalQty,
+    revenue: product.totalRevenue,
+  }));
+
+  const summary = rankedProducts.reduce(
+    (totals, product) => ({
+      totalQty: totals.totalQty + (product.totalQty || 0),
+      totalRevenue: totals.totalRevenue + (product.totalRevenue || 0),
+      orderCount: totals.orderCount + (product.orderCount || 0),
+    }),
+    { totalQty: 0, totalRevenue: 0, orderCount: 0 }
+  );
+
+  res.json({
+    days,
+    limit,
+    startDate,
+    endDate: new Date(),
+    totalRows: rankedProducts.length,
+    summary: {
+      ...summary,
+      totalRevenue: Number(summary.totalRevenue.toFixed(2)),
+    },
+    products: rankedProducts,
+    rows: rankedProducts,
+    topProducts: rankedProducts,
   });
 });
 
@@ -651,6 +770,7 @@ export {
   updateOrdersToPaidWithTimers,
   getFilteredPOSOrders,
   getPOSOrderDetails,
+  getTopProductsReportPOS,
   getOnlineOrders,
   getOnlineOrderDetails,
 };
