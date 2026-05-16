@@ -8,6 +8,7 @@ const defaultRoles = [
   'CASHIER',             // POS cashier
   'ONLINE_CASHIER',      // Online order handler only
   'HYBRID_CASHIER',      // Can manage both online + POS
+  'SUPERVISOR',          // Can create POS orders and apply limited order discounts
   'INVENTORY',           // Manages stock & product catalog
   'STOCK_MANAGER',       // Manages stock operations
   'ADMIN',               // Full admin access

@@ -23,6 +23,12 @@ const posUsers = [
     isActive: true,
   },
   {
+    username: 'supervisor1',
+    password: 'supervisor123',
+    role: 'SUPERVISOR',
+    isActive: true,
+  },
+  {
     username: 'inventory1',
     password: 'stock123',
     role: 'INVENTORY',

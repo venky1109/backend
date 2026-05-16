@@ -75,8 +75,8 @@ export const isAdminOrInventory = allowRoles(
 
 // ✅ Cashier / Admin
 export const cashierOrAdmin = allowRoles(
-  ['CASHIER', 'ONLINE_CASHIER', 'HYBRID_CASHIER', 'ADMIN'],
-  'Cashier or Admin access required'
+  ['CASHIER', 'ONLINE_CASHIER', 'HYBRID_CASHIER', 'SUPERVISOR', 'ADMIN'],
+  'Cashier, Supervisor, or Admin access required'
 );
 
 

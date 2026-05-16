@@ -4,12 +4,63 @@ import Order from '../models/orderModel.js';
 import Product from '../models/productModel.js';
 import User from '../models/userModel.js';
 
+const MAX_POS_ORDER_DISCOUNT_PERCENTAGE = 1.5;
+
+const hasPOSOrderDiscountRequest = (req) =>
+  req.body.discountPercentage !== undefined ||
+  req.body.orderDiscountPercentage !== undefined ||
+  req.body.orderDiscount !== undefined ||
+  req.body.discount !== undefined;
+
 // Utility to calculate order prices
-const calcPrices = (items) => {
+const calcPrices = (items, discountPercentage = 0) => {
   const itemsPrice = items.reduce((sum, item) => sum + item.qty * item.price, 0);
   const shippingPrice = 0;
-  const totalPrice = itemsPrice + shippingPrice;
-  return { itemsPrice, shippingPrice, totalPrice };
+  const normalizedDiscountPercentage = Number(discountPercentage || 0);
+  const discountAmount = Number(
+    ((itemsPrice * normalizedDiscountPercentage) / 100).toFixed(2)
+  );
+  const totalPrice = Number((itemsPrice + shippingPrice - discountAmount).toFixed(2));
+  return {
+    itemsPrice,
+    shippingPrice,
+    discountPercentage: normalizedDiscountPercentage,
+    discountAmount,
+    totalPrice,
+  };
+};
+
+const resolvePOSOrderDiscountPercentage = (req, res, fallbackDiscountPercentage = 0) => {
+  const hasRequestedDiscount = hasPOSOrderDiscountRequest(req);
+
+  const requestedDiscount = Number(
+    hasRequestedDiscount
+      ? req.body.discountPercentage ??
+          req.body.orderDiscountPercentage ??
+          req.body.orderDiscount ??
+          req.body.discount
+      : fallbackDiscountPercentage
+  );
+
+  if (!Number.isFinite(requestedDiscount) || requestedDiscount < 0) {
+    res.status(400);
+    throw new Error('Discount percentage must be a valid positive number');
+  }
+
+  if (requestedDiscount === 0 || !hasRequestedDiscount) return Number(requestedDiscount.toFixed(2));
+
+  const role = String(req.user?.role || '').trim().toUpperCase();
+  if (!['SUPERVISOR', 'ADMIN', 'DIRECTOR'].includes(role)) {
+    res.status(403);
+    throw new Error('Only Supervisor or Admin can apply order discount');
+  }
+
+  if (requestedDiscount > MAX_POS_ORDER_DISCOUNT_PERCENTAGE) {
+    res.status(400);
+    throw new Error(`Order discount cannot exceed ${MAX_POS_ORDER_DISCOUNT_PERCENTAGE}%`);
+  }
+
+  return Number(requestedDiscount.toFixed(2));
 };
 
 const formatRemarkDate = (date = new Date()) =>
@@ -100,9 +151,12 @@ const normalizeOrderItemsFromDB = async (orderItems) => {
 };
 
 const recalculateOrderTotals = (order) => {
-  const { itemsPrice, shippingPrice, totalPrice } = calcPrices(order.orderItems || []);
+  const { itemsPrice, shippingPrice, discountPercentage, discountAmount, totalPrice } =
+    calcPrices(order.orderItems || [], order.discountPercentage || 0);
   order.itemsPrice = itemsPrice;
   order.shippingPrice = shippingPrice;
+  order.discountPercentage = discountPercentage;
+  order.discountAmount = discountAmount;
   order.totalPrice = totalPrice;
 };
 
@@ -129,7 +183,7 @@ const buildOrderLookup = (idOrMk) => {
 // ------------------------------------
 
 // CASHIER => only own POS orders in own location
-// MANAGER => all POS orders in own location
+// MANAGER/SUPERVISOR => all POS orders in own location
 // ADMIN/DIRECTOR => all orders, all sources, all locations, including null
 const buildPOSAccessFilter = (loggedInUser) => {
   const base = { source: 'CASHIER' };
@@ -148,7 +202,7 @@ const buildPOSAccessFilter = (loggedInUser) => {
     };
   }
 
-  if (role === 'MANAGER') {
+  if (['MANAGER', 'SUPERVISOR'].includes(role)) {
     return {
       ...base,
       posLocation: location,
@@ -175,7 +229,7 @@ const buildOnlineAccessFilter = (loggedInUser) => {
     return { _id: null };
   }
 
-  if (role === 'MANAGER') {
+  if (['MANAGER', 'SUPERVISOR'].includes(role)) {
     return {
       ...base,
       'shippingAddress.city': location,
@@ -260,7 +314,11 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
     };
   });
 
-  const { itemsPrice, shippingPrice, totalPrice } = calcPrices(dbOrderItems);
+  const discountPercentage = resolvePOSOrderDiscountPercentage(req, res);
+  const { itemsPrice, shippingPrice, discountAmount, totalPrice } = calcPrices(
+    dbOrderItems,
+    discountPercentage
+  );
   const source = 'CASHIER';
 const normalizedPaymentMethod = String(paymentMethod || '').toUpperCase();
 
@@ -288,6 +346,8 @@ const isPaid =
       paymentMethod,
       itemsPrice,
       shippingPrice,
+      discountPercentage,
+      discountAmount,
       totalPrice,
       orderId,
       MK_order_id: numericMkOrderId,
@@ -384,6 +444,8 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
       orderId: order.orderId,
       phoneNo: order?.user?.phoneNo || '',
       totalPrice: order.totalPrice || 0,
+      discountPercentage: order.discountPercentage || 0,
+      discountAmount: order.discountAmount || 0,
       posUserName: order.posUserName || '',
       posLocation: order.posLocation || '',
           isPaid:order.isPaid||'',
@@ -411,6 +473,8 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
     orderId: order.orderId,
     phoneNo: order?.user?.phoneNo || '',
     totalPrice: order.totalPrice || 0,
+    discountPercentage: order.discountPercentage || 0,
+    discountAmount: order.discountAmount || 0,
     posUserName: order.posUserName || '',
     posLocation: order.posLocation || '',
         isPaid:order.isPaid||'',
@@ -468,6 +532,8 @@ const getPOSOrderDetails = asyncHandler(async (req, res) => {
     orderId: order.orderId,
     phoneNo: order?.user?.phoneNo || '',
     totalPrice: order.totalPrice || 0,
+    discountPercentage: order.discountPercentage || 0,
+    discountAmount: order.discountAmount || 0,
     posUserName: order.posUserName || '',
     posLocation: order.posLocation || '',
     isPaid:order.isPaid||'',
@@ -853,9 +919,17 @@ const updatePOSOrderItems = asyncHandler(async (req, res) => {
   }
 
   const { orderItems, remarks } = req.body;
-  if (!Array.isArray(orderItems) || !orderItems.length) {
+  const hasOrderItemUpdates = Array.isArray(orderItems) && orderItems.length > 0;
+  const hasDiscountUpdate = hasPOSOrderDiscountRequest(req);
+
+  if (!hasOrderItemUpdates && !hasDiscountUpdate) {
     res.status(400);
-    throw new Error('orderItems array is required');
+    throw new Error('orderItems array or discount percentage is required');
+  }
+
+  if (orderItems !== undefined && !hasOrderItemUpdates) {
+    res.status(400);
+    throw new Error('orderItems array must contain at least one item');
   }
 
   const accessFilter = buildPOSAccessFilter(req.user);
@@ -870,16 +944,29 @@ const updatePOSOrderItems = asyncHandler(async (req, res) => {
   }
 
   const previousItems = order.orderItems.map((item) => item.toObject());
-  const normalizedItems = await normalizeOrderItemsFromDB(orderItems);
+  const normalizedItems = hasOrderItemUpdates
+    ? await normalizeOrderItemsFromDB(orderItems)
+    : previousItems;
+  const discountPercentage = resolvePOSOrderDiscountPercentage(
+    req,
+    res,
+    order.discountPercentage || 0
+  );
 
-  order.orderItems = normalizedItems;
+  if (hasOrderItemUpdates) {
+    order.orderItems = normalizedItems;
+  }
+  order.discountPercentage = discountPercentage;
   recalculateOrderTotals(order);
   order.remarks = order.remarks || [];
   order.remarks.push(
     createRemark(
       req,
-      remarks || buildDefaultItemEditRemark(previousItems, normalizedItems),
-      'ITEMS_UPDATED'
+      remarks ||
+        (hasOrderItemUpdates
+          ? buildDefaultItemEditRemark(previousItems, normalizedItems)
+          : `Updated order discount to ${discountPercentage}% on ${formatRemarkDate()}`),
+      hasOrderItemUpdates ? 'ITEMS_UPDATED' : 'ORDER_UPDATED'
     )
   );
 
