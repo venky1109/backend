@@ -9,8 +9,10 @@ const defaultRoles = [
   'ONLINE_CASHIER',      // Online order handler only
   'HYBRID_CASHIER',      // Can manage both online + POS
   'INVENTORY',           // Manages stock & product catalog
+  'STOCK_MANAGER',       // Manages stock operations
   'ADMIN',               // Full admin access
   'PROPRIETOR',          // Business owner role
+  'DIRECTOR',            // Director-level access without location login restriction
 
   // ✅ Newly added roles for order flow
   'ONLINE_ORDER_MANAGER', // Manages all online orders and their stages
@@ -23,7 +25,9 @@ const defaultRoles = [
 
 // const allowedRoles = process.env.REACT_APP_POS_USER_ROLES?.split(',') || defaultRoles;
 const envRoles = process.env.REACT_APP_POS_USER_ROLES?.split(',').map(r => r.trim()).filter(Boolean);
-const allowedRoles = Array.isArray(envRoles) && envRoles.length > 0 ? envRoles : defaultRoles;
+const allowedRoles = Array.isArray(envRoles) && envRoles.length > 0
+  ? Array.from(new Set([...envRoles, ...defaultRoles]))
+  : defaultRoles;
 
 
 
@@ -43,6 +47,8 @@ const posUserSchema = mongoose.Schema(
     role: {
       type: String,
       required: true,
+      trim: true,
+      uppercase: true,
       enum: {
         values: allowedRoles,
         message: 'Invalid role assigned',

@@ -1,6 +1,8 @@
 import PosUser from '../models/PosUserModel.js';
 import generateTokenPos from '../utils/generateTokenPos.js';
 
+const normalizeRole = (role) => String(role || '').trim().toUpperCase();
+
 // @desc    Login POS user
 // @route   POST /api/pos_users/login
 export const loginPosUser = async (req, res) => {
@@ -14,7 +16,10 @@ export const loginPosUser = async (req, res) => {
     }
 
     // ✅ Check if location matches
-    if (location && user.location !== location) {
+    const role = normalizeRole(user.role);
+
+    // Directors are not restricted to a location while logging in.
+    if (role !== 'DIRECTOR' && location && user.location !== location) {
       return res.status(403).json({ message: 'Invalid location' });
     }
 
@@ -37,12 +42,20 @@ export const loginPosUser = async (req, res) => {
 
 
 export const registerPosUser = async (req, res) => {
-  const { username, password, role, location } = req.body;
+  const { username, password, role, isActive, location, balance } = req.body;
+  const normalizedRole = normalizeRole(role);
 
   const exists = await PosUser.findOne({ username });
   if (exists) return res.status(400).json({ message: 'Username already exists' });
 
-  const user = await PosUser.create({ username, password, role, location });
+  const user = await PosUser.create({
+    username,
+    password,
+    role: normalizedRole,
+    isActive: isActive ?? true,
+    location: location ?? '',
+    balance: balance ?? 0,
+  });
   res.status(201).json({ message: 'POS user created', _id: user._id });
 };
 
@@ -54,6 +67,18 @@ export const getPosUsers = async (req, res) => {
   res.json(users);
 };
 
+// @desc    Get POS user role by username
+// @route   GET /api/posusers/role/:username
+export const getPosUserRoleByUsername = async (req, res) => {
+  const user = await PosUser.findOne({ username: req.params.username }).select('role');
+
+  if (!user) {
+    return res.status(404).json({ message: 'POS user not found' });
+  }
+
+  res.json({ role: user.role });
+};
+
 // @desc    Update POS user
 // @route   PUT /api/pos_users/:id
 export const updatePosUser = async (req, res) => {
@@ -61,7 +86,7 @@ export const updatePosUser = async (req, res) => {
   if (!user) return res.status(404).json({ message: 'POS User not found' });
 
   user.username = req.body.username || user.username;
-  user.role = req.body.role || user.role;
+  user.role = req.body.role ? normalizeRole(req.body.role) : user.role;
   user.isActive = req.body.isActive ?? user.isActive;
   user.location = req.body.location ?? user.location; // ✅ added line
   user.balance = req.body.balance ?? user.balance;

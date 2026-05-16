@@ -12,6 +12,100 @@ const calcPrices = (items) => {
   return { itemsPrice, shippingPrice, totalPrice };
 };
 
+const formatRemarkDate = (date = new Date()) =>
+  new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kolkata',
+  }).format(date);
+
+const createRemark = (req, message, action = 'ORDER_UPDATED') => ({
+  message,
+  action,
+  createdBy: req.user?._id || null,
+  createdByName: req.user?.username || req.user?.name || null,
+  createdAt: new Date(),
+});
+
+const itemKey = (item) =>
+  [
+    String(item?._id || ''),
+    String(item?.productId || item?.product || ''),
+    String(item?.brandId || ''),
+    String(item?.financialId || ''),
+  ]
+    .filter(Boolean)
+    .join(':');
+
+const buildDefaultItemEditRemark = (previousItems, nextItems) => {
+  const previousKeys = new Set(previousItems.map(itemKey));
+  const nextKeys = new Set(nextItems.map(itemKey));
+  const now = formatRemarkDate();
+
+  const added = nextItems.filter((item) => !previousKeys.has(itemKey(item)));
+  const removed = previousItems.filter((item) => !nextKeys.has(itemKey(item)));
+  const shared = nextItems.filter((item) => previousKeys.has(itemKey(item)));
+
+  const messages = [];
+  if (added.length) {
+    messages.push(`Added items (${added.map((item) => item.name).join(', ')}) on ${now}`);
+  }
+  if (removed.length) {
+    messages.push(`Removed items (${removed.map((item) => item.name).join(', ')}) on ${now}`);
+  }
+  if (shared.length && !added.length && !removed.length) {
+    messages.push(`Updated items on ${now}`);
+  }
+
+  return messages.join('. ') || `Updated order items on ${now}`;
+};
+
+const normalizeOrderItemsFromDB = async (orderItems) => {
+  const productIds = orderItems.map((x) => x.productId || x.product).filter(Boolean);
+  const itemsFromDB = await Product.find({ _id: { $in: productIds } });
+
+  return orderItems.map((item) => {
+    const productId = item.productId || item.product;
+    const product = itemsFromDB.find((p) => p._id.toString() === String(productId));
+    if (!product) throw new Error(`Product not found: ${productId}`);
+
+    const brandId = item.brandId;
+    const detail = product.details.find((d) => d._id.toString() === String(brandId));
+    if (!detail) throw new Error(`Brand not found: ${brandId}`);
+
+    const financialId = item.financialId;
+    const finance = detail.financials.find((f) => f._id.toString() === String(financialId));
+    if (!finance) throw new Error(`Financials not found: ${financialId}`);
+
+    return {
+      ...(item._id ? { _id: item._id } : {}),
+      name: product.name,
+      brand: detail.brand,
+      quantity: item.quantity ?? finance.quantity,
+      units: item.units ?? finance.units,
+      qty: Number(item.qty || 0),
+      image: item.image || detail.images?.[0]?.image || '',
+      price: finance.dprice,
+      productId: product._id,
+      brandId: detail._id,
+      financialId: finance._id,
+      barcode: finance.barcode || [],
+      product: product._id,
+    };
+  });
+};
+
+const recalculateOrderTotals = (order) => {
+  const { itemsPrice, shippingPrice, totalPrice } = calcPrices(order.orderItems || []);
+  order.itemsPrice = itemsPrice;
+  order.shippingPrice = shippingPrice;
+  order.totalPrice = totalPrice;
+};
+
 const buildOrderLookup = (idOrMk) => {
   const trimmed = String(idOrMk).trim();
 
@@ -36,13 +130,13 @@ const buildOrderLookup = (idOrMk) => {
 
 // CASHIER => only own POS orders in own location
 // MANAGER => all POS orders in own location
-// ADMIN => all orders, all sources, all locations, including null
+// ADMIN/DIRECTOR => all orders, all sources, all locations, including null
 const buildPOSAccessFilter = (loggedInUser) => {
   const base = { source: 'CASHIER' };
 
   if (!loggedInUser) return base;
 
-  const role = String(loggedInUser.role || '').toUpperCase();
+  const role = String(loggedInUser.role || '').trim().toUpperCase();
   const username = loggedInUser.username || null;
   const location = loggedInUser.location || null;
 
@@ -61,7 +155,7 @@ const buildPOSAccessFilter = (loggedInUser) => {
     };
   }
 
-  if (role === 'ADMIN') {
+  if (['ADMIN', 'DIRECTOR'].includes(role)) {
     return {}; // all orders including ONLINE
   }
 
@@ -74,7 +168,7 @@ const buildOnlineAccessFilter = (loggedInUser) => {
 
   if (!loggedInUser) return base;
 
-  const role = String(loggedInUser.role || '').toUpperCase();
+  const role = String(loggedInUser.role || '').trim().toUpperCase();
   const location = loggedInUser.location || null;
 
   if (role === 'CASHIER') {
@@ -88,7 +182,7 @@ const buildOnlineAccessFilter = (loggedInUser) => {
     };
   }
 
-  if (role === 'ADMIN') {
+  if (['ADMIN', 'DIRECTOR'].includes(role)) {
     return base;
   }
 
@@ -108,6 +202,7 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
     MK_order_id,
     posUserName,
     posLocation,
+    remarks,
   } = req.body;
 
   if (!orderItems?.length) {
@@ -201,7 +296,9 @@ const isPaid =
       paidAt: isPaid ? Date.now() : null,
       posUserName: resolvedPosUserName,
       posLocation: resolvedPosLocation,
-     
+      remarks: remarks
+        ? [createRemark(req, remarks, 'ORDER_UPDATED')]
+        : [createRemark(req, `Added items on ${formatRemarkDate()}`, 'ITEMS_ADDED')],
     });
 
     return res.status(201).json(createdOrder);
@@ -221,7 +318,7 @@ const isPaid =
 // mode = latest | today | custom | phone
 // ------------------------------------
 const getFilteredPOSOrders = asyncHandler(async (req, res) => {
-  const { mode, phone, from, to } = req.query;
+  const { mode, phone, customerNumber, posUser, location, from, to, date } = req.query;
 
   let query = buildPOSAccessFilter(req.user);
   const now = new Date();
@@ -247,8 +344,27 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
     query.createdAt = { $gte: start, $lte: end };
   }
 
-  if (mode === 'phone') {
-    if (!phone) {
+  if (date) {
+    const selectedDate = new Date(date);
+    selectedDate.setHours(0, 0, 0, 0);
+
+    const end = new Date(date);
+    end.setHours(23, 59, 59, 999);
+
+    query.createdAt = { $gte: selectedDate, $lte: end };
+  }
+
+  if (posUser) {
+    query.posUserName = { $regex: String(posUser).trim(), $options: 'i' };
+  }
+
+  if (location) {
+    query.posLocation = { $regex: String(location).trim(), $options: 'i' };
+  }
+
+  if (mode === 'phone' || phone || customerNumber) {
+    const requestedPhone = phone || customerNumber;
+    if (!requestedPhone) {
       res.status(400);
       throw new Error('phone number is required');
     }
@@ -258,7 +374,7 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
       .populate('user', '_id name phoneNo');
 
     const filtered = orders.filter(
-      (order) => String(order?.user?.phoneNo || '') === String(phone)
+      (order) => String(order?.user?.phoneNo || '') === String(requestedPhone)
     );
 
     const shaped = filtered.map((order) => ({
@@ -329,8 +445,16 @@ const getPOSOrderDetails = asyncHandler(async (req, res) => {
   }
 
   const items = (order.orderItems || []).map((item, index) => ({
+    _id: item._id,
+    itemId: item._id,
     sNo: index + 1,
     item: item.name || '',
+    productId: item.productId || item.product || '',
+    brandId: item.brandId || '',
+    financialId: item.financialId || '',
+    brand: item.brand || '',
+    quantity: item.quantity || '',
+    units: item.units || '',
     weight: `${item.quantity || ''} ${item.units || ''}`.trim(),
     qty: item.qty || 0,
     pricePerQty: item.price || 0,
@@ -349,6 +473,7 @@ const getPOSOrderDetails = asyncHandler(async (req, res) => {
     isPaid:order.isPaid||'',
     paymentMethod:order.paymentMethod||'',
     source: order.source || '',
+    remarks: order.remarks || [],
     items,
   });
 });
@@ -718,6 +843,121 @@ const updateOrdersToPaidWithTimers = async (req, res) => {
 };
 
 // ------------------------------------
+// POS / ADMIN: Order Management - Edit Items
+// ------------------------------------
+const updatePOSOrderItems = asyncHandler(async (req, res) => {
+  const filter = buildOrderLookup(req.params.id);
+  if (!filter) {
+    res.status(400);
+    throw new Error('Invalid order identifier');
+  }
+
+  const { orderItems, remarks } = req.body;
+  if (!Array.isArray(orderItems) || !orderItems.length) {
+    res.status(400);
+    throw new Error('orderItems array is required');
+  }
+
+  const accessFilter = buildPOSAccessFilter(req.user);
+  const order = await Order.findOne({
+    ...accessFilter,
+    ...filter,
+  });
+
+  if (!order) {
+    res.status(404);
+    throw new Error('Order not found');
+  }
+
+  const previousItems = order.orderItems.map((item) => item.toObject());
+  const normalizedItems = await normalizeOrderItemsFromDB(orderItems);
+
+  order.orderItems = normalizedItems;
+  recalculateOrderTotals(order);
+  order.remarks = order.remarks || [];
+  order.remarks.push(
+    createRemark(
+      req,
+      remarks || buildDefaultItemEditRemark(previousItems, normalizedItems),
+      'ITEMS_UPDATED'
+    )
+  );
+
+  const updatedOrder = await order.save();
+  res.json(updatedOrder);
+});
+
+// ------------------------------------
+// POS / ADMIN: Order Management - Delete Item
+// ------------------------------------
+const deletePOSOrderItem = asyncHandler(async (req, res) => {
+  const filter = buildOrderLookup(req.params.id);
+  if (!filter) {
+    res.status(400);
+    throw new Error('Invalid order identifier');
+  }
+
+  const accessFilter = buildPOSAccessFilter(req.user);
+  const order = await Order.findOne({
+    ...accessFilter,
+    ...filter,
+  });
+
+  if (!order) {
+    res.status(404);
+    throw new Error('Order not found');
+  }
+
+  const itemId = String(req.params.itemId);
+  const itemIndex = order.orderItems.findIndex((item) => String(item._id) === itemId);
+
+  if (itemIndex === -1) {
+    res.status(404);
+    throw new Error('Order item not found');
+  }
+
+  const [removedItem] = order.orderItems.splice(itemIndex, 1);
+  recalculateOrderTotals(order);
+  order.remarks = order.remarks || [];
+  order.remarks.push(
+    createRemark(
+      req,
+      req.body?.remarks ||
+        `Removed items (${removedItem.name}) on ${formatRemarkDate()}`,
+      'ITEMS_REMOVED'
+    )
+  );
+
+  const updatedOrder = await order.save();
+  res.json(updatedOrder);
+});
+
+// ------------------------------------
+// POS / ADMIN: Order Management - Delete Order
+// ------------------------------------
+const deletePOSOrder = asyncHandler(async (req, res) => {
+  const filter = buildOrderLookup(req.params.id);
+  if (!filter) {
+    res.status(400);
+    throw new Error('Invalid order identifier');
+  }
+
+  const accessFilter = buildPOSAccessFilter(req.user);
+  const order = await Order.findOne({
+    ...accessFilter,
+    ...filter,
+  });
+
+  if (!order) {
+    res.status(404);
+    throw new Error('Order not found');
+  }
+
+  await Order.deleteOne({ _id: order._id });
+  res.json({ message: 'Order deleted successfully', deletedOrderId: order._id });
+});
+
+// ------------------------------------
 // ONLINE: Example list controller
 // ------------------------------------
 const getOnlineOrders = asyncHandler(async (req, res) => {
@@ -773,4 +1013,7 @@ export {
   getTopProductsReportPOS,
   getOnlineOrders,
   getOnlineOrderDetails,
+  updatePOSOrderItems,
+  deletePOSOrderItem,
+  deletePOSOrder,
 };

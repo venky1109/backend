@@ -23,6 +23,9 @@ import {
   getFilteredPOSOrders,
   getPOSOrderDetails,
   getTopProductsReportPOS,
+  updatePOSOrderItems,
+  deletePOSOrderItem,
+  deletePOSOrder,
 } from '../controllers/orderPOSController.js';
 import { protect, admin } from '../middleware/authMiddleware.js';
 // import { protectPOS } from '../middleware/posAuthMiddleware.js';
@@ -42,6 +45,15 @@ router
 router
   .route('/pos/:id/items')
   .get(posProtect, getOrderPOSItemsByOrderId);
+
+router
+  .route('/pos/:id/items/:itemId')
+  .delete(posProtect, cashierOrAdmin, deletePOSOrderItem);
+
+router
+  .route('/pos/:id')
+  .put(posProtect, cashierOrAdmin, updatePOSOrderItems)
+  .delete(posProtect, cashierOrAdmin, deletePOSOrder);
   // ➕ New Order Lifecycle Role Routes
 router.get('/pos/orders/all', posProtect, onlineOrderManager, getAllOrdersWithTimers);
 router.get('/pos/orders/packing', posProtect, packingAgent, getOrdersToPackWithTimers);

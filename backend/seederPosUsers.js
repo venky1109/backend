@@ -29,6 +29,12 @@ const posUsers = [
     isActive: true,
   },
   {
+    username: 'stockmanager1',
+    password: 'stockmanager123',
+    role: 'STOCK_MANAGER',
+    isActive: true,
+  },
+  {
   username: 'stockadmin',
   password: 'securepass123',
   role: 'INVENTORY',
@@ -50,6 +56,12 @@ const posUsers = [
     username: 'owner1',
     password: 'proprietor123',
     role: 'PROPRIETOR',
+    isActive: true,
+  },
+  {
+    username: 'director1',
+    password: 'director123',
+    role: 'DIRECTOR',
     isActive: true,
   },
   {

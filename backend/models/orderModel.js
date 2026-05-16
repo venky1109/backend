@@ -36,6 +36,30 @@ const orderSchema = mongoose.Schema(
         },
       },
     ],
+    remarks: [
+      {
+        message: { type: String, required: true },
+        action: {
+          type: String,
+          enum: ['ITEMS_ADDED', 'ITEMS_UPDATED', 'ITEMS_REMOVED', 'ORDER_UPDATED', 'ORDER_DELETED'],
+          default: 'ORDER_UPDATED',
+        },
+        createdBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'PosUser',
+          default: null,
+        },
+        createdByName: {
+          type: String,
+          trim: true,
+          default: null,
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
 
     shippingAddress: {
       street: { type: String, required: true },

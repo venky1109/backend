@@ -41,7 +41,9 @@ export const protectPOS = asyncHandler(async (req, res, next) => {
 // 🔁 Generic role checker
 const allowRoles = (roles, message = 'Access denied') => {
   return (req, res, next) => {
-    if (req.user && roles.includes(req.user.role)) {
+    const role = String(req.user?.role || '').trim().toUpperCase();
+
+    if (['ADMIN', 'DIRECTOR'].includes(role) || roles.includes(role)) {
       return next();
     }
 
@@ -52,21 +54,21 @@ const allowRoles = (roles, message = 'Access denied') => {
 
 // ✅ Catalog + Inventory + Purchase + Dispatch
 export const catalogInventoryAccess = allowRoles(
-  ['ADMIN', 'STOCK_MANAGER', 'CASHIER'],
-  'Access denied: ADMIN, STOCK_MANAGER, or CASHIER only'
+  ['ADMIN', 'DIRECTOR', 'STOCK_MANAGER', 'CASHIER'],
+  'Access denied: ADMIN, DIRECTOR, STOCK_MANAGER, or CASHIER only'
 );
 
 
 // ✅ Admin / Proprietor
 export const isAdminOrProp = allowRoles(
-  ['ADMIN', 'PROPRIETOR'],
-  'Admin or Proprietor access required'
+  ['ADMIN', 'PROPRIETOR', 'DIRECTOR'],
+  'Admin, Proprietor, or Director access required'
 );
 
 
 // ✅ Admin / Inventory support
 export const isAdminOrInventory = allowRoles(
-  ['ADMIN', 'INVENTORY', 'STOCK_MANAGER'],
+  ['ADMIN', 'DIRECTOR', 'INVENTORY', 'STOCK_MANAGER'],
   'Admin or Inventory access required'
 );
 
@@ -92,66 +94,70 @@ export const allowAllRoles = (req, res, next) => {
 
 // ✅ Admin only
 export const admin = allowRoles(
-  ['ADMIN'],
+  ['ADMIN', 'DIRECTOR'],
   'Not authorized as admin'
 );
 
 
 // ✅ Online order manager
 export const onlineOrderManager = allowRoles(
-  ['ONLINE_ORDER_MANAGER'],
-  'Access denied: ONLINE_ORDER_MANAGER only'
+  ['ADMIN', 'DIRECTOR', 'ONLINE_ORDER_MANAGER'],
+  'Access denied: ADMIN, DIRECTOR, or ONLINE_ORDER_MANAGER only'
 );
 
 
 // ✅ Packing agents
 export const packingAgent = allowRoles(
-  ['PACKING_AGENT', 'HYBRID_AGENT'],
-  'Access denied: PACKING_AGENT or HYBRID_AGENT only'
+  ['ADMIN', 'DIRECTOR', 'PACKING_AGENT', 'HYBRID_AGENT'],
+  'Access denied: ADMIN, DIRECTOR, PACKING_AGENT, or HYBRID_AGENT only'
 );
 
 
 // ✅ Dispatch agents
 export const dispatchAgent = allowRoles(
-  ['DISPATCH_AGENT', 'HYBRID_AGENT'],
-  'Access denied: DISPATCH_AGENT or HYBRID_AGENT only'
+  ['ADMIN', 'DIRECTOR', 'DISPATCH_AGENT', 'HYBRID_AGENT'],
+  'Access denied: ADMIN, DIRECTOR, DISPATCH_AGENT, or HYBRID_AGENT only'
 );
 
 
 // ✅ Delivery agents
 export const deliveryAgent = allowRoles(
-  ['DELIVERY_AGENT'],
-  'Access denied: DELIVERY_AGENT only'
+  ['ADMIN', 'DIRECTOR', 'DELIVERY_AGENT'],
+  'Access denied: ADMIN, DIRECTOR, or DELIVERY_AGENT only'
 );
 
 
 // 💰 Payment access control
 export const paymentAccess = (req, res, next) => {
-  const role = req.user?.role;
+  const role = String(req.user?.role || '').trim().toUpperCase();
 
   if (!role) {
     return res.status(401).json({ message: 'Unauthorized' });
   }
 
+  if (['ADMIN', 'DIRECTOR'].includes(role)) {
+    return next();
+  }
+
   // 👁 View payments
   if (req.method === 'GET') {
-    if (['ADMIN', 'CASHIER', 'STOCK_MANAGER'].includes(role)) {
+    if (['CASHIER', 'STOCK_MANAGER'].includes(role)) {
       return next();
     }
   }
 
   // ➕ Create payments
   if (req.method === 'POST') {
-    if (['ADMIN', 'CASHIER'].includes(role)) {
+    if (['CASHIER'].includes(role)) {
       return next();
     }
   }
 
   // ✏️ Update / ❌ Delete
   if (['PUT', 'PATCH', 'DELETE'].includes(req.method)) {
-    if (role === 'ADMIN') {
-      return next();
-    }
+    return res.status(403).json({
+      message: 'Access denied for payments',
+    });
   }
 
   return res.status(403).json({
@@ -162,6 +168,6 @@ export const paymentAccess = (req, res, next) => {
 
 // 📦 Strict stock control (recommended)
 export const stockManagerOnly = allowRoles(
-  ['ADMIN', 'STOCK_MANAGER'],
-  'Access denied: ADMIN or STOCK_MANAGER only'
+  ['ADMIN', 'DIRECTOR', 'STOCK_MANAGER'],
+  'Access denied: ADMIN, DIRECTOR, or STOCK_MANAGER only'
 );
