@@ -52,6 +52,7 @@ router
 
 router
   .route('/pos/:id')
+  .get(posProtect, cashierOrAdmin, getPOSOrderDetails)
   .put(posProtect, cashierOrAdmin, updatePOSOrderItems)
   .delete(posProtect, cashierOrAdmin, deletePOSOrder);
   // ➕ New Order Lifecycle Role Routes
