@@ -1,6 +1,93 @@
 import asyncHandler from '../middleware/asyncHandler.js';
 import Product from '../models/productModel.js';
 import { assignFinancialMkIds } from '../utils/financialMkid.js';
+import mongoose from 'mongoose';
+
+const findMatchingFinancialByBarcode = (product, barcode) => {
+  if (!barcode) return null;
+  const barcodeToFind = String(barcode);
+
+  for (const detail of product.details || []) {
+    const financial = detail.financials?.find((item) =>
+      (item.barcode || []).some((code) => String(code) === barcodeToFind)
+    );
+
+    if (financial) {
+      return { detail, financial };
+    }
+  }
+
+  return null;
+};
+
+const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const firstDetailImage = (details = []) => {
+  for (const detail of details || []) {
+    const image = detail.images?.[0]?.image;
+    if (image) return image;
+  }
+
+  return null;
+};
+
+const getProductImageUrl = async (product, match = null) => {
+  const matchedImage = match?.detail?.images?.[0]?.image;
+  if (matchedImage) return matchedImage;
+
+  const directImage = firstDetailImage(product.details);
+  if (directImage) return directImage;
+
+  const orFilters = [];
+
+  if (product.catalogProductId) {
+    orFilters.push({ catalogProductId: product.catalogProductId });
+  }
+
+  for (const value of [product.englishname, product.productname, product.name]) {
+    if (value) {
+      orFilters.push({ name: { $regex: `^${escapeRegex(value)}$`, $options: 'i' } });
+      orFilters.push({ productname: { $regex: `^${escapeRegex(value)}$`, $options: 'i' } });
+      orFilters.push({ englishname: { $regex: `^${escapeRegex(value)}$`, $options: 'i' } });
+    }
+  }
+
+  if (!orFilters.length) return null;
+
+  const imageProduct = await Product.findOne({
+    _id: { $ne: product._id },
+    'details.images.0': { $exists: true },
+    $or: orFilters,
+  }).select('details.images');
+
+  return imageProduct ? firstDetailImage(imageProduct.details) : null;
+};
+
+const productWithMatchMeta = async (product, match = null) => {
+  const payload = product.toObject ? product.toObject() : product;
+  const imageUrl = await getProductImageUrl(payload, match);
+
+  if (!match) {
+    return {
+      ...payload,
+      imageUrl,
+    };
+  }
+
+  return {
+    ...payload,
+    imageUrl,
+    matchedDetailId: match.detail?._id,
+    matchedBrand: match.detail?.brand,
+    matchedCatalogBrandId: match.detail?.catalogBrandId,
+    matchedFinancialId: match.financial?._id,
+    matchedCatalogProductBarcodeId: match.financial?.catalogProductBarcodeId,
+    matchedMkid: match.financial?.mkid,
+    matchedBarcode: match.financial?.barcode || [],
+    matchedQuantity: match.financial?.quantity,
+    matchedUnits: match.financial?.units,
+  };
+};
 
 // @desc    Fetch all products
 // @route   GET /api/products
@@ -16,6 +103,10 @@ const getProducts = asyncHandler(async (req, res) => {
           $options: 'i',
         }} ,
         {category: { $regex: req.query.keyword, $options: 'i', }},
+        {productname: { $regex: req.query.keyword, $options: 'i', }},
+        {englishname: { $regex: req.query.keyword, $options: 'i', }},
+        {teluguname: { $regex: req.query.keyword, $options: 'i', }},
+        {hsncode: { $regex: req.query.keyword, $options: 'i', }},
         {'details.brand': {$regex:req.query.keyword,$options: 'i', }},
       ],
       }
@@ -114,11 +205,52 @@ const getProductBySlug = asyncHandler(async (req, res) => {
   // Find the product by slug instead of ID
   await assignFinancialMkIds(Product);
 
-  const product = await Product.findOne({ slug: req.params.slug });
+  const lookupValue = String(req.params.slug || '').trim();
+  const barcodeToFind = lookupValue.split(',')[0];
+  const catalogBarcodeId = Number(lookupValue);
+  let product = null;
+  let match = null;
+
+  if (mongoose.Types.ObjectId.isValid(lookupValue)) {
+    product = await Product.findById(lookupValue);
+  }
+
+  if (!product) {
+    product = await Product.findOne({ slug: lookupValue });
+  }
+
+  if (!product && barcodeToFind) {
+    product = await Product.findOne({
+      'details.financials.barcode': { $in: [barcodeToFind] },
+    });
+
+    if (product) {
+      match = findMatchingFinancialByBarcode(product, barcodeToFind);
+    }
+  }
+
+  if (!product && Number.isFinite(catalogBarcodeId)) {
+    product = await Product.findOne({
+      'details.financials.catalogProductBarcodeId': catalogBarcodeId,
+    });
+
+    if (product) {
+      for (const detail of product.details || []) {
+        const financial = detail.financials?.find(
+          (item) => Number(item.catalogProductBarcodeId) === catalogBarcodeId
+        );
+
+        if (financial) {
+          match = { detail, financial };
+          break;
+        }
+      }
+    }
+  }
 
   if (product) {
     // console.log("Product Found:", product);  // ✅ Log the product if found
-    return res.json(product);
+    return res.json(await productWithMatchMeta(product, match));
   } else {
     // console.log("Product Not Found for Slug:", req.params.slug);  // ✅ Log missing slug cases
     res.status(404);
@@ -131,9 +263,24 @@ const getProductBySlug = asyncHandler(async (req, res) => {
 // @route   POST /api/products
 // @access  Private/Admin
 const createProduct = asyncHandler(async (req, res) => {
+  const {
+    name = 'Sample Product',
+    productname = name,
+    englishname = '',
+    teluguname = '',
+    hsncode = '',
+    gst = 0,
+    category = 'Sample',
+  } = req.body;
+
   const product = new Product({
-    "name": "Sample Product",
-    "category": "Sample",
+    name,
+    productname,
+    englishname,
+    teluguname,
+    hsncode,
+    gst,
+    category,
     "details": [
       {
         "brand": "TestBrand1",
@@ -147,7 +294,8 @@ const createProduct = asyncHandler(async (req, res) => {
             "dprice": 0.00,
             "Discount": 0,
             "quantity": 0,
-            "countInStock": 0
+            "countInStock": 0,
+            "units": "unit"
           },
         ]
       },
@@ -179,7 +327,8 @@ const createProductDetail = asyncHandler(async (req, res) => {
           "dprice": 0.00,
           "Discount": 0,
           "quantity": 0,
-          "countInStock": 0
+          "countInStock": 0,
+          "units": "unit"
         },
       ]
     };
@@ -217,7 +366,8 @@ const createFinancialDetail = asyncHandler(async (req, res) => {
           "dprice": 0.00,
           "Discount": 0,
           "quantity": 0,
-          "countInStock": 0
+          "countInStock": 0,
+          "units": "unit"
         
       
     };
@@ -335,19 +485,37 @@ const getBatchFinancialDetails = async (req, res) => {
 // @route   PUT /api/products/:id
 // @access  Private/Admin
 const updateProduct = asyncHandler(async (req, res) => {
-  const { name, price, description, image, brand, category, countInStock } =
+  const {
+    name,
+    productname,
+    englishname,
+    teluguname,
+    hsncode,
+    gst,
+    price,
+    description,
+    image,
+    brand,
+    category,
+    countInStock,
+  } =
     req.body;
 
   const product = await Product.findById(req.params.id);
 
   if (product) {
-    product.name = name;
-    product.price = price;
-    product.description = description;
-    product.image = image;
-    product.brand = brand;
-    product.category = category;
-    product.countInStock = countInStock;
+    product.name = name ?? product.name;
+    product.productname = productname ?? product.productname ?? product.name;
+    product.englishname = englishname ?? product.englishname;
+    product.teluguname = teluguname ?? product.teluguname;
+    product.hsncode = hsncode ?? product.hsncode;
+    product.gst = gst ?? product.gst;
+    product.price = price ?? product.price;
+    product.description = description ?? product.description;
+    product.image = image ?? product.image;
+    product.brand = brand ?? product.brand;
+    product.category = category ?? product.category;
+    product.countInStock = countInStock ?? product.countInStock;
 
     const updatedProduct = await product.save();
     res.json(updatedProduct);
@@ -406,15 +574,34 @@ const deleteProductDetail = asyncHandler(async (req, res) => {
 const updateProductDetail = asyncHandler(async (req, res) => {
   const productId = req.params.productId;
   const detailId = req.params.id;
-  const { name,brand,category, discount,price, quantity,image,manualQuantity } = req.body; // Adjust these based on your detail structure
+  const {
+    name,
+    productname,
+    englishname,
+    teluguname,
+    hsncode,
+    gst,
+    brand,
+    category,
+    discount,
+    price,
+    quantity,
+    image,
+    manualQuantity,
+  } = req.body; // Adjust these based on your detail structure
 
   try {
     const product = await Product.findById(productId);
    
     if (product) {
       const detail = product.details.find((detail) => detail._id.toString() === detailId);
-      product.name = name;
-      product.category=category;
+      product.name = name ?? product.name;
+      product.productname = productname ?? product.productname ?? product.name;
+      product.englishname = englishname ?? product.englishname;
+      product.teluguname = teluguname ?? product.teluguname;
+      product.hsncode = hsncode ?? product.hsncode;
+      product.gst = gst ?? product.gst;
+      product.category = category ?? product.category;
     //   console.log('category'+category);
       if (detail) {
         // Update the detail properties
@@ -560,57 +747,170 @@ const getTopProducts = asyncHandler(async (req, res) => {
 // });
 
 const updateStockById = asyncHandler(async (req, res) => {
-  const { brandID, financialID, newQuantity } = req.body;
+  const {
+    brandID,
+    financialID,
+    newQuantity,
+    countInStock,
+    price,
+    MRP,
+    mrp,
+    dprice,
+    sellingPrice,
+    salePrice,
+    discountedPrice,
+    discountPrice,
+    discount,
+    Discount,
+    quantity,
+    packQuantity,
+    weight,
+    units,
+    unit,
+    barcode,
+    name,
+    productName,
+    productname,
+    englishname,
+    teluguname,
+    hsncode,
+    gst,
+    gstRate,
+    category,
+    brand,
+    image,
+    imageUrl,
+  } = req.body;
   const { id: productId } = req.params;
 
   // console.log('🛠️ Updating stock for:', { productId, brandID, financialID, newQuantity });
 
-  if (!brandID || !financialID || typeof newQuantity !== 'number') {
+  if (!brandID || !financialID) {
     res.status(400);
-    throw new Error('brandID, financialID, and valid newQuantity are required');
+    throw new Error('brandID and financialID are required');
   }
 
-  const product = await Product.findById(productId);
+  if (
+    !mongoose.Types.ObjectId.isValid(productId) ||
+    !mongoose.Types.ObjectId.isValid(brandID) ||
+    !mongoose.Types.ObjectId.isValid(financialID)
+  ) {
+    res.status(400);
+    throw new Error('Valid productID, brandID, and financialID are required');
+  }
+
+  const setFields = {};
+  const finalCountInStock = newQuantity ?? countInStock;
+  const finalPrice = price ?? MRP ?? mrp;
+  const finalDprice = dprice ?? sellingPrice ?? salePrice ?? discountedPrice ?? discountPrice;
+  const finalDiscount = Discount ?? discount;
+  const finalQuantity = quantity ?? packQuantity ?? weight;
+  const finalUnits = units ?? unit;
+  const finalGst = gst ?? gstRate;
+  const finalName = name ?? productName;
+  const finalProductName =
+    productname ??
+    (englishname && teluguname ? `${englishname}(${teluguname})` : undefined) ??
+    finalName;
+  const toFiniteNumber = (value, fieldName) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      res.status(400);
+      throw new Error(`${fieldName} must be a number`);
+    }
+    return parsed;
+  };
+
+  if (finalCountInStock !== undefined) {
+    setFields['details.$[brand].financials.$[financial].countInStock'] = toFiniteNumber(
+      finalCountInStock,
+      'newQuantity/countInStock'
+    );
+  }
+
+  if (finalPrice !== undefined) {
+    setFields['details.$[brand].financials.$[financial].price'] = toFiniteNumber(finalPrice, 'price');
+  }
+
+  if (finalDprice !== undefined) {
+    setFields['details.$[brand].financials.$[financial].dprice'] = toFiniteNumber(finalDprice, 'dprice');
+  }
+
+  if (finalDiscount !== undefined) {
+    setFields['details.$[brand].financials.$[financial].Discount'] = toFiniteNumber(
+      finalDiscount,
+      'discount/Discount'
+    );
+  }
+
+  if (finalQuantity !== undefined) {
+    setFields['details.$[brand].financials.$[financial].quantity'] = toFiniteNumber(finalQuantity, 'quantity');
+  }
+
+  if (finalUnits !== undefined) {
+    setFields['details.$[brand].financials.$[financial].units'] = finalUnits;
+  }
+
+  if (barcode !== undefined) {
+    setFields['details.$[brand].financials.$[financial].barcode'] = Array.isArray(barcode)
+      ? barcode
+      : [barcode];
+  }
+
+  if (finalName !== undefined) setFields.name = finalName;
+  if (finalProductName !== undefined) setFields.productname = finalProductName;
+  if (englishname !== undefined) setFields.englishname = englishname;
+  if (teluguname !== undefined) setFields.teluguname = teluguname;
+  if (hsncode !== undefined) setFields.hsncode = hsncode;
+  if (finalGst !== undefined) setFields.gst = toFiniteNumber(finalGst, 'gst/gstRate');
+  if (category !== undefined) setFields.category = category;
+  if (brand !== undefined) setFields['details.$[brand].brand'] = brand;
+
+  const finalImage = imageUrl ?? image;
+  if (finalImage !== undefined) {
+    setFields['details.$[brand].images'] = finalImage ? [{ image: finalImage }] : [];
+  }
+
+  if (Object.keys(setFields).length === 0) {
+    res.status(400);
+    throw new Error('No valid financial fields provided for update');
+  }
+
+  const product = await Product.findOneAndUpdate(
+    {
+      _id: productId,
+      'details._id': brandID,
+      'details.financials._id': financialID,
+    },
+    {
+      $set: setFields,
+    },
+    {
+      new: true,
+      runValidators: true,
+      arrayFilters: [
+        { 'brand._id': new mongoose.Types.ObjectId(brandID) },
+        { 'financial._id': new mongoose.Types.ObjectId(financialID) },
+      ],
+    }
+  );
+
   if (!product) {
     res.status(404);
-    throw new Error('Product not found');
+    throw new Error('Product, brand, or financial record not found');
   }
 
-  let brandFound = false;
-  let financialFound = false;
-
-  for (const brand of product.details) {
-    if (brand._id.toString() === brandID) {
-      brandFound = true;
-      for (const financial of brand.financials) {
-        if (financial._id.toString() === financialID) {
-          financialFound = true;
-          financial.countInStock = newQuantity;
-          break;
-        }
-      }
-      break;
-    }
-  }
-
-  if (!brandFound) {
-    res.status(404);
-    throw new Error(`Brand not found: ${brandID}`);
-  }
-
-  if (!financialFound) {
-    res.status(404);
-    throw new Error(`Financial record not found: ${financialID}`);
-  }
-
-  await product.save();
+  const updatedBrand = product.details.id(brandID);
+  const financial = updatedBrand?.financials.id(financialID);
 
   res.status(200).json({
     message: 'Stock updated successfully',
     productID: product._id,
     brandID,
     financialID,
-    newQuantity,
+    newQuantity: finalCountInStock,
+    countInStock: financial?.countInStock,
+    financial,
   });
 });
 

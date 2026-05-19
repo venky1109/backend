@@ -2,6 +2,8 @@ import asyncHandler from '../../middleware/asyncHandler.js';
 import pool from '../../config/pg.js';
 import Product from '../../models/productModel.js';
 import { DispatchOrder } from '../../models/inventory/dispatchModels.js';
+import { RequestTracking } from '../../models/inventory/requestTrackingModel.js';
+import mongoose from 'mongoose';
 
 const generateDispatchNo = () => {
   return `MKD${Date.now().toString().slice(-6)}`;
@@ -11,6 +13,89 @@ const toPgDate = (value) => {
   if (!value) return null;
   const match = String(value).trim().match(/(\d{4})-(\d{2})-(\d{2})/);
   return match ? match[0] : null;
+};
+
+const toBarcodeArray = (barcode) => {
+  if (Array.isArray(barcode)) return barcode;
+  return [barcode];
+};
+
+const hasBarcode = (financial, code) =>
+  toBarcodeArray(financial?.barcode)
+    .filter(Boolean)
+    .some((item) => String(item) === String(code));
+
+const syncBarcodeMongoIds = async (client, item, product, detail, financial) => {
+  if (!item?.catalog_product_barcode_id || !product?._id || !detail?._id || !financial?._id) {
+    return;
+  }
+
+  const imageUrl =
+    detail.images?.[0]?.image ||
+    product.details?.find((productDetail) => productDetail.images?.[0]?.image)?.images?.[0]?.image ||
+    null;
+
+  await client.query(
+    `
+    UPDATE catalog.product_barcodes
+    SET
+      mongo_product_id = $1,
+      mongo_brand_id = $2,
+      mongo_category_id = $3,
+      mongo_financial_id = $4,
+      image_url = COALESCE($5, image_url),
+      updated_at = now()
+    WHERE id = $6
+    `,
+    [
+      String(product._id),
+      String(detail._id),
+      product.mongoCategoryId ? String(product.mongoCategoryId) : null,
+      String(financial._id),
+      imageUrl,
+      Number(item.catalog_product_barcode_id),
+    ]
+  );
+};
+
+const findInventoryStockForDispatch = async (client, barcodeInfo, expDate, forUpdate = false) => {
+  const stockResult = await client.query(
+    `
+    SELECT ip.*
+    FROM inventory.inventory_products ip
+    LEFT JOIN catalog.product_barcodes stock_pb
+      ON stock_pb.id = ip.product_barcode_id
+    WHERE ip.exp_date::date = $2::date
+      AND COALESCE(ip.is_active, true) = true
+      AND (
+        ip.product_barcode_id = $1
+        OR (
+          stock_pb.product_id = $3
+          AND stock_pb.brand_id IS NOT DISTINCT FROM $4
+          AND stock_pb.category_id IS NOT DISTINCT FROM $5
+          AND stock_pb.unit_id IS NOT DISTINCT FROM $6
+          AND stock_pb.quantity IS NOT DISTINCT FROM $7
+        )
+      )
+    ORDER BY
+      CASE WHEN ip.product_barcode_id = $1 THEN 0 ELSE 1 END,
+      ip.updated_at DESC,
+      ip.id DESC
+    LIMIT 1
+    ${forUpdate ? 'FOR UPDATE OF ip' : ''}
+    `,
+    [
+      Number(barcodeInfo.product_barcode_id),
+      expDate,
+      Number(barcodeInfo.product_id),
+      barcodeInfo.brand_id ? Number(barcodeInfo.brand_id) : null,
+      barcodeInfo.category_id ? Number(barcodeInfo.category_id) : null,
+      barcodeInfo.unit_id ? Number(barcodeInfo.unit_id) : null,
+      Number(barcodeInfo.quantity || 1),
+    ]
+  );
+
+  return stockResult.rows[0];
 };
 
 const validateDispatchItems = (items = []) => {
@@ -49,7 +134,8 @@ const hydrateDispatchItemsFromBarcodes = async (client, items = []) => {
         pb.product_id,
         pb.brand_id,
         pb.category_id,
-        pb.unit_id
+        pb.unit_id,
+        pb.quantity
       FROM catalog.product_barcodes pb
       WHERE pb.id = $1
         AND COALESCE(pb.is_active, true) = true
@@ -63,23 +149,25 @@ const hydrateDispatchItemsFromBarcodes = async (client, items = []) => {
 
     const barcodeInfo = barcodeResult.rows[0];
 
-    const stockResult = await client.query(
-      `
-      SELECT *
-      FROM inventory.inventory_products
-      WHERE product_barcode_id = $1
-        AND exp_date::date = $2::date
-        AND COALESCE(is_active, true) = true
-        AND COALESCE(no_of_units, 0) >= $3
-      ORDER BY id ASC
-      LIMIT 1
-      `,
-      [Number(item.product_barcode_id), expDate, units]
+    const inventoryStock = await findInventoryStockForDispatch(
+      client,
+      barcodeInfo,
+      expDate
     );
 
-    if (stockResult.rowCount === 0) {
+    if (!inventoryStock) {
       throw new Error(
         `Inventory stock not found for barcode ID ${item.product_barcode_id} and expiry ${expDate}`
+      );
+    }
+
+    const availableUnits = Number(inventoryStock.no_of_units || 0);
+
+    if (availableUnits < units) {
+      throw new Error(
+        `Insufficient stock for ${
+          inventoryStock.product_name || item.product_barcode_id
+        }. Available: ${availableUnits}, Required: ${units}`
       );
     }
 
@@ -241,7 +329,12 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
         SELECT
           doi.*,
           to_char(doi.exp_date::date, 'YYYY-MM-DD') AS exp_date_text,
-          pb.product_id AS barcode_product_id
+          pb.product_id AS barcode_product_id,
+          pb.product_id,
+          pb.brand_id,
+          pb.category_id,
+          pb.unit_id,
+          pb.quantity
         FROM dispatch.dispatch_order_items doi
         JOIN catalog.product_barcodes pb
           ON pb.id = doi.product_barcode_id
@@ -273,20 +366,19 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
           throw new Error(`Invalid no_of_units for dispatch item ${item.id}`);
         }
 
-        const inventoryResult = await client.query(
-          `
-          SELECT *
-          FROM inventory.inventory_products
-          WHERE product_barcode_id = $1
-            AND exp_date::date = $2::date
-            AND COALESCE(is_active, true) = true
-          FOR UPDATE
-          LIMIT 1
-          `,
-          [Number(item.product_barcode_id), expDate]
+        const inventoryProduct = await findInventoryStockForDispatch(
+          client,
+          {
+            product_barcode_id: item.product_barcode_id,
+            product_id: item.product_id || item.barcode_product_id,
+            brand_id: item.brand_id,
+            category_id: item.category_id,
+            unit_id: item.unit_id,
+            quantity: item.quantity,
+          },
+          expDate,
+          true
         );
-
-        const inventoryProduct = inventoryResult.rows[0];
 
         if (!inventoryProduct) {
           throw new Error(
@@ -384,6 +476,13 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
       [dispatch_status, Number(req.params.id)]
     );
 
+    if (['dispatched', 'cancelled'].includes(dispatch_status)) {
+      await RequestTracking.upsertDispatchReceiveRequest(updatedResult.rows[0], {
+        db: client,
+        requestedBy: RequestTracking.actorName(req.user || {}),
+      });
+    }
+
     await client.query('COMMIT');
 
     res.json(updatedResult.rows[0]);
@@ -464,15 +563,48 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       `
       SELECT
         doi.*,
+        pb.id AS catalog_product_barcode_id,
+        pb.product_id,
+        pb.brand_id,
+        pb.category_id,
+        pb.unit_id,
         pb.mk_barcode,
         pb.barcode,
-        pb.quantity AS barcode_quantity
+        pb.quantity AS barcode_quantity,
+        p.product_name_eng,
+        p.product_name_tel,
+        p.hsncode,
+        p.gst_rate,
+        b.brand_name_english,
+        c.category_name_english,
+        u.unit_short_code,
+        u.unit_name,
+        ip.unit_price AS inventory_unit_price,
+        poi.expected_unit_price,
+        poi.actual_unit_price
       FROM dispatch.dispatch_order_items doi
-      JOIN catalog.product_barcodes pb
-        ON pb.id = doi.product_barcode_id
+      JOIN catalog.product_barcodes pb ON pb.id = doi.product_barcode_id
+      LEFT JOIN catalog.products p ON p.id = pb.product_id
+      LEFT JOIN catalog.brands b ON b.id = pb.brand_id
+      LEFT JOIN catalog.categories c ON c.id = pb.category_id
+      LEFT JOIN catalog.units u ON u.id = pb.unit_id
+      LEFT JOIN LATERAL (
+        SELECT ip.unit_price
+        FROM inventory.inventory_products ip
+        WHERE ip.product_barcode_id = doi.product_barcode_id
+          AND ip.exp_date::date = doi.exp_date::date
+        ORDER BY ip.updated_at DESC, ip.id DESC
+        LIMIT 1
+      ) ip ON true
+      LEFT JOIN purchases.purchase_order_items poi
+        ON poi.purchase_order_id = $2
+       AND poi.product_id = doi.product_id
+       AND poi.brand_id IS NOT DISTINCT FROM doi.brand_id
+       AND poi.category_id IS NOT DISTINCT FROM doi.category_id
+       AND poi.unit_id IS NOT DISTINCT FROM doi.unit_id
       WHERE doi.dispatch_order_id = $1
       `,
-      [dispatchOrderId]
+      [dispatchOrderId, dispatchOrder.purchase_order_id]
     );
 
     const items = itemsResult.rows;
@@ -485,62 +617,125 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
     const updatedProducts = [];
 
     for (const item of items) {
-      const barcodeToMatch = item.mk_barcode || item.barcode;
+      const barcodes = [...new Set([item.mk_barcode, item.barcode].filter(Boolean).map(String))];
 
-      if (!barcodeToMatch) {
+      if (!barcodes.length) {
         res.status(400);
         throw new Error(`Barcode value missing for dispatch item ${item.id}`);
       }
 
       const qtyToAdd = Number(item.no_of_units || item.qty || 0);
+      const unitPrice = Number(
+        item.inventory_unit_price ??
+          item.actual_unit_price ??
+          item.expected_unit_price ??
+          0
+      );
+      const discount = Number(item.discount ?? item.Discount ?? 0);
+      const sellingPrice = Number(item.dprice ?? item.selling_price ?? unitPrice);
 
       if (!Number.isFinite(qtyToAdd) || qtyToAdd <= 0) {
         res.status(400);
         throw new Error(`Invalid qty for item ${item.id}`);
       }
 
-      const product = await Product.findOne({
-        'details.financials.barcode': barcodeToMatch,
-      });
+      let product =
+        (await Product.findOne({ catalogProductId: Number(item.product_id) })) ||
+        (await Product.findOne({
+          'details.financials.catalogProductBarcodeId': Number(item.catalog_product_barcode_id),
+        })) ||
+        (await Product.findOne({ 'details.financials.barcode': { $in: barcodes } }));
 
       if (!product) {
-        res.status(404);
-        throw new Error(`Mongo product not found for barcode ${barcodeToMatch}`);
+        const productName =
+          item.product_name_eng || item.product_name_tel || `Product ${item.product_id}`;
+
+        product = new Product({
+          _id: new mongoose.Types.ObjectId(),
+          catalogProductId: Number(item.product_id),
+          catalogCategoryId: item.category_id ? Number(item.category_id) : undefined,
+          mongoCategoryId: new mongoose.Types.ObjectId().toString(),
+          name: productName,
+          productname: productName,
+          englishname: item.product_name_eng || '',
+          teluguname: item.product_name_tel || '',
+          hsncode: item.hsncode || '',
+          gst: Number(item.gst_rate || 0),
+          category: item.category_name_english || 'Migration',
+          details: [],
+        });
       }
 
-      let updated = false;
-
-      for (const detail of product.details || []) {
-        for (const financial of detail.financials || []) {
-          if (String(financial.barcode) === String(barcodeToMatch)) {
-            const oldStock = Number(financial.countInStock || 0);
-            const newStock = oldStock + qtyToAdd;
-
-            financial.countInStock = newStock;
-
-            updatedProducts.push({
-              productId: product._id,
-              productName: product.name,
-              brandId: detail._id,
-              brandName: detail.brand,
-              financialId: financial._id,
-              barcode: barcodeToMatch,
-              oldStock,
-              addedQty: qtyToAdd,
-              newStock,
-            });
-
-            updated = true;
-          }
-        }
+      if (!product.mongoCategoryId) {
+        product.mongoCategoryId = new mongoose.Types.ObjectId().toString();
       }
 
-      if (!updated) {
-        res.status(400);
-        throw new Error(`Financial barcode not matched: ${barcodeToMatch}`);
+      if (item.category_id && !product.catalogCategoryId) {
+        product.catalogCategoryId = Number(item.category_id);
+      }
+
+      let detail = (product.details || []).find(
+        (productDetail) =>
+          Number(productDetail.catalogBrandId) === Number(item.brand_id) ||
+          String(productDetail.brand || '').toLowerCase() ===
+            String(item.brand_name_english || '').toLowerCase()
+      );
+
+      if (!detail) {
+        product.details.push({
+          _id: new mongoose.Types.ObjectId(),
+          catalogBrandId: Number(item.brand_id),
+          brand: item.brand_name_english || 'Migration',
+          description: 'Created from outlet migration receive',
+          images: [],
+          financials: [],
+        });
+        detail = product.details[product.details.length - 1];
+      }
+
+      let financial = (detail.financials || []).find(
+        (itemFinancial) =>
+          Number(itemFinancial.catalogProductBarcodeId) ===
+            Number(item.catalog_product_barcode_id) ||
+          hasBarcode(itemFinancial, item.mk_barcode) ||
+          hasBarcode(itemFinancial, item.barcode)
+      );
+
+      const oldStock = financial ? Number(financial.countInStock || 0) : 0;
+
+      if (financial) {
+        financial.countInStock = oldStock + qtyToAdd;
+        financial.barcode = [...new Set([...toBarcodeArray(financial.barcode), ...barcodes])];
+      } else {
+        detail.financials.push({
+          _id: new mongoose.Types.ObjectId(),
+          catalogProductBarcodeId: Number(item.catalog_product_barcode_id),
+          mkid: Number(item.mk_barcode || 0) || undefined,
+          price: unitPrice,
+          dprice: sellingPrice,
+          Discount: discount,
+          quantity: Number(item.barcode_quantity || item.qty || 0),
+          countInStock: qtyToAdd,
+          units: item.unit_short_code || item.unit_name || 'unit',
+          barcode: barcodes,
+        });
+        financial = detail.financials[detail.financials.length - 1];
       }
 
       await product.save();
+      await syncBarcodeMongoIds(client, item, product, detail, financial);
+
+      updatedProducts.push({
+        productId: product._id,
+        productName: product.name,
+        brandId: detail._id,
+        brandName: detail.brand,
+        financialId: financial._id,
+        barcode: barcodes,
+        oldStock,
+        addedQty: qtyToAdd,
+        newStock: Number(financial.countInStock || 0),
+      });
     }
 
     await client.query(
@@ -566,6 +761,11 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       [dispatchOrderId]
     );
 
+    await RequestTracking.upsertDispatchReceiveRequest(updatedOrderResult.rows[0], {
+      db: client,
+      requestedBy: RequestTracking.actorName(req.user || {}),
+    });
+
     await client.query('COMMIT');
 
     res.json({
@@ -575,6 +775,15 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
     });
   } catch (error) {
     await client.query('ROLLBACK');
+
+    try {
+      await RequestTracking.markDispatchReceiveFailed(dispatchOrderId, error, {
+        requestedBy: RequestTracking.actorName(req.user || {}),
+      });
+    } catch (trackingError) {
+      console.error('Failed to track outlet receive failure:', trackingError.message);
+    }
+
     throw error;
   } finally {
     client.release();

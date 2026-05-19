@@ -106,6 +106,82 @@ export const updatePOSProductFinancial = async (req, res) => {
     res.status(500).json({ error: 'Failed to update financial' });
   }
 };
+
+const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const firstDetailImage = (details = []) => {
+  for (const item of details || []) {
+    const image = item.images?.[0]?.image;
+    if (image) return image;
+  }
+
+  return null;
+};
+
+const findFallbackImageUrl = async (product, detail) => {
+  const directImage = detail?.images?.[0]?.image || firstDetailImage(product.details);
+  if (directImage) return directImage;
+
+  const orFilters = [];
+
+  if (product.catalogProductId) {
+    orFilters.push({ catalogProductId: product.catalogProductId });
+  }
+
+  for (const value of [product.englishname, product.productname, product.name]) {
+    if (value) {
+      orFilters.push({ name: { $regex: `^${escapeRegex(value)}$`, $options: 'i' } });
+      orFilters.push({ productname: { $regex: `^${escapeRegex(value)}$`, $options: 'i' } });
+      orFilters.push({ englishname: { $regex: `^${escapeRegex(value)}$`, $options: 'i' } });
+    }
+  }
+
+  if (!orFilters.length) return null;
+
+  const imageProduct = await Product.findOne({
+    _id: { $ne: product._id },
+    'details.images.0': { $exists: true },
+    $or: orFilters,
+  }).select('details.images');
+
+  return imageProduct ? firstDetailImage(imageProduct.details) : null;
+};
+
+const buildPOSProductSearchResponse = async ({ product, detail, financial }) => {
+  const price = Number(financial.price || 0);
+  const dprice = Number(financial.dprice || 0);
+  const imageUrl = await findFallbackImageUrl(product, detail);
+
+  return {
+    id: product._id,
+    catalogProductId: product.catalogProductId,
+    productName: product.name,
+    productname: product.productname || product.name,
+    englishname: product.englishname || '',
+    teluguname: product.teluguname || '',
+    hsncode: product.hsncode || '',
+    gst: product.gst ?? 0,
+    category: product.category,
+    brand: detail.brand,
+    catalogBrandId: detail.catalogBrandId,
+    brandId: detail._id,
+    financialId: financial._id,
+    catalogProductBarcodeId: financial.catalogProductBarcodeId,
+    mkid: financial.mkid,
+    MRP: financial.price,
+    dprice: financial.dprice,
+    quantity: financial.quantity,
+    countInStock: financial.countInStock,
+    units: financial.units,
+    image: imageUrl,
+    imageUrl,
+    catalogQuantity: financial.quantity,
+    discount: price > 0 ? Math.round(((price - dprice) / price) * 100) : 0,
+    qty: 1,
+    barcode: financial.barcode,
+  };
+};
+
 // @desc Get product by barcode
 export const getPOSProductByBarcode = async (req, res) => {
   try {
@@ -149,28 +225,7 @@ export const getPOSProductByBarcode = async (req, res) => {
 
     // Find the financial entry with the matching barcode
     const financial = detail.financials.find((f) => f.barcode.includes(barcodeToFind));
-    const price = Number(financial.price || 0);
-    const dprice = Number(financial.dprice || 0);
-
-    const response = {
-      id: product._id,
-      productName: product.name,
-      category: product.category,
-      brand: detail.brand,
-      brandId: detail._id,
-      financialId: financial._id,
-      mkid: financial.mkid,
-      MRP: financial.price,
-      dprice: financial.dprice,
-      quantity: financial.quantity,
-      countInStock: financial.countInStock,
-      units: financial.units,
-      image: detail.images?.[0]?.image || null,
-      catalogQuantity: financial.quantity,
-      discount: price > 0 ? Math.round(((price - dprice) / price) * 100) : 0,
-      qty: 1,
-      barcode: financial.barcode  // Return the barcode as an array
-    };
+    const response = await buildPOSProductSearchResponse({ product, detail, financial });
 
     return res.status(200).json(response);
 
@@ -190,28 +245,7 @@ export const getPOSProductByMkid = async (req, res) => {
     }
 
     const { product, detail, financial } = found;
-    const price = Number(financial.price || 0);
-    const dprice = Number(financial.dprice || 0);
-
-    const response = {
-      id: product._id,
-      productName: product.name,
-      category: product.category,
-      brand: detail.brand,
-      brandId: detail._id,
-      financialId: financial._id,
-      mkid: financial.mkid,
-      MRP: financial.price,
-      dprice: financial.dprice,
-      quantity: financial.quantity,
-      countInStock: financial.countInStock,
-      units: financial.units,
-      image: detail.images?.[0]?.image || null,
-      catalogQuantity: financial.quantity,
-      discount: price > 0 ? Math.round(((price - dprice) / price) * 100) : 0,
-      qty: 1,
-      barcode: financial.barcode,
-    };
+    const response = await buildPOSProductSearchResponse({ product, detail, financial });
 
     return res.status(200).json(response);
   } catch (err) {

@@ -4,6 +4,7 @@ import {
   InventoryProduct,
   StockTransaction,
 } from '../../models/inventory/inventoryProductModels.js';
+import { RequestTracking } from '../../models/inventory/requestTrackingModel.js';
 
 export const getInventoryProducts = asyncHandler(async (req, res) => {
   const rows = await InventoryProduct.findAll();
@@ -134,15 +135,38 @@ export const deleteStockTransaction = asyncHandler(async (req, res) => {
 });
 
 export const addVerifiedPurchaseToInventory = asyncHandler(async (req, res) => {
-  const result = await InventoryProduct.receiveVerifiedPurchase(
-    req.body,
-    req.user || {}
-  );
+  let result;
+
+  try {
+    result = await InventoryProduct.receiveVerifiedPurchase(
+      req.body,
+      req.user || {}
+    );
+
+    await RequestTracking.upsertInventoryMigrationRequest(req.body, result, {
+      requestedBy: RequestTracking.actorName(req.user || {}),
+      status: 'completed',
+    });
+  } catch (error) {
+    try {
+      await RequestTracking.upsertInventoryMigrationRequest(req.body, {}, {
+        requestedBy: RequestTracking.actorName(req.user || {}),
+        error,
+      });
+    } catch (trackingError) {
+      console.error('Failed to track inventory migration failure:', trackingError.message);
+    }
+
+    throw error;
+  }
 
   res.status(result.updated_existing ? 200 : 201).json({
-    message: result.updated_existing
+    message: result.already_received
+      ? 'Purchase item already added to inventory'
+      : result.updated_existing
       ? 'Existing inventory product updated'
       : 'Purchase verified and added to inventory',
+    already_received: Boolean(result.already_received),
     updated_existing: result.updated_existing,
     inventoryProduct: result.inventoryProduct,
     total_price: result.total_price,

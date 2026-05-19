@@ -2,7 +2,6 @@ import asyncHandler from '../middleware/asyncHandler.js';
 import mongoose from 'mongoose';
 import Order from '../models/orderModel.js';
 import Product from '../models/productModel.js';
-import User from '../models/userModel.js';
 
 const MAX_POS_ORDER_DISCOUNT_PERCENTAGE = 1.5;
 
@@ -13,20 +12,33 @@ const hasPOSOrderDiscountRequest = (req) =>
   req.body.discount !== undefined;
 
 // Utility to calculate order prices
-const calcPrices = (items, discountPercentage = 0) => {
-  const itemsPrice = items.reduce((sum, item) => sum + item.qty * item.price, 0);
-  const shippingPrice = 0;
-  const normalizedDiscountPercentage = Number(discountPercentage || 0);
-  const discountAmount = Number(
-    ((itemsPrice * normalizedDiscountPercentage) / 100).toFixed(2)
+const roundOrderDiscount = (itemsPrice, discountPercentage) => {
+  const safeItemsPrice = Math.floor(Number(itemsPrice || 0));
+  const safeDiscountPercentage = Math.min(
+    Math.max(Number(discountPercentage || 0), 0),
+    MAX_POS_ORDER_DISCOUNT_PERCENTAGE
   );
-  const totalPrice = Number((itemsPrice + shippingPrice - discountAmount).toFixed(2));
+
+  const discountAmount = Math.floor(
+    safeItemsPrice * (safeDiscountPercentage / 100)
+  );
+
   return {
-    itemsPrice,
-    shippingPrice,
-    discountPercentage: normalizedDiscountPercentage,
+    itemsPrice: safeItemsPrice,
+    discountPercentage: safeDiscountPercentage,
     discountAmount,
-    totalPrice,
+    totalPrice: safeItemsPrice - discountAmount,
+  };
+};
+
+const calcPrices = (items, discountPercentage = 0) => {
+  const rawItemsPrice = items.reduce((sum, item) => sum + item.qty * item.price, 0);
+  const shippingPrice = 0;
+  const discount = roundOrderDiscount(rawItemsPrice, discountPercentage);
+
+  return {
+    ...discount,
+    shippingPrice,
   };
 };
 
@@ -55,12 +67,7 @@ const resolvePOSOrderDiscountPercentage = (req, res, fallbackDiscountPercentage 
     throw new Error('Only Supervisor or Admin can apply order discount');
   }
 
-  if (requestedDiscount > MAX_POS_ORDER_DISCOUNT_PERCENTAGE) {
-    res.status(400);
-    throw new Error(`Order discount cannot exceed ${MAX_POS_ORDER_DISCOUNT_PERCENTAGE}%`);
-  }
-
-  return Number(requestedDiscount.toFixed(2));
+  return Math.min(Number(requestedDiscount.toFixed(2)), MAX_POS_ORDER_DISCOUNT_PERCENTAGE);
 };
 
 const formatRemarkDate = (date = new Date()) =>
@@ -176,6 +183,29 @@ const buildOrderLookup = (idOrMk) => {
   if (!or.length) return null;
 
   return { $or: or };
+};
+
+const canAccessAllOutlets = (loggedInUser) => {
+  const role = String(loggedInUser?.role || '').trim().toUpperCase();
+  return ['ADMIN', 'DIRECTOR'].includes(role);
+};
+
+const resolvePOSOrderOutlet = (req, requestedPosUserName, requestedPosLocation) => {
+  const role = String(req.user?.role || '').trim().toUpperCase();
+  const authenticatedPosUserName = req.user?.username || null;
+  const authenticatedPosLocation = req.user?.location || null;
+
+  if (['CASHIER', 'MANAGER', 'SUPERVISOR'].includes(role)) {
+    return {
+      posUserName: authenticatedPosUserName,
+      posLocation: authenticatedPosLocation,
+    };
+  }
+
+  return {
+    posUserName: requestedPosUserName || authenticatedPosUserName,
+    posLocation: requestedPosLocation || authenticatedPosLocation,
+  };
 };
 
 // ------------------------------------
@@ -327,16 +357,10 @@ const isPaid =
   normalizedPaymentMethod === 'CASH' ;
 
 
-  let resolvedPosUserName = posUserName || null;
-  let resolvedPosLocation = posLocation || null;
-
-  if (user && mongoose.Types.ObjectId.isValid(user)) {
-    const posUser = await User.findById(user).select('username location');
-    if (posUser) {
-      resolvedPosUserName = resolvedPosUserName || posUser.username || null;
-      resolvedPosLocation = resolvedPosLocation || posUser.location || null;
-    }
-  }
+  const {
+    posUserName: resolvedPosUserName,
+    posLocation: resolvedPosLocation,
+  } = resolvePOSOrderOutlet(req, posUserName, posLocation);
 
   try {
     const createdOrder = await Order.create({
@@ -418,7 +442,7 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
     query.posUserName = { $regex: String(posUser).trim(), $options: 'i' };
   }
 
-  if (location) {
+  if (location && canAccessAllOutlets(req.user)) {
     query.posLocation = { $regex: String(location).trim(), $options: 'i' };
   }
 

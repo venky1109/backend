@@ -1,5 +1,25 @@
 import BasePgModel from './BasePgModel.js';
 
 export const PgPayment = new BasePgModel('payments.payments', [
-  'payment_number','source_type','source_id','amount','currency','status','paid_at','method','notes'
+  'payment_number',
+  'source_type',
+  'source_id',
+  'bill_id',
+  'expense_type',
+  'expense_category',
+  'organisation_name',
+  'organisation_type',
+  'supplier_id',
+  'warehouse_id',
+  'outlet_id',
+  'service_from_date',
+  'service_to_date',
+  'amount',
+  'currency',
+  'status',
+  'paid_at',
+  'method',
+  'reference_number',
+  'notes',
+  'metadata',
 ]);

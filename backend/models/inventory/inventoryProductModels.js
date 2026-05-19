@@ -253,7 +253,7 @@ export const InventoryProduct = {
           pb.mk_barcode,
           p.product_code,
           COALESCE(p.product_name_eng, p.product_name_tel, p.product_code) AS product_name,
-          p."hsn-code" AS hsn_code
+          p.hsncode AS hsn_code
         FROM catalog.product_barcodes pb
         JOIN catalog.products p ON p.id = pb.product_id
         WHERE pb.id = $1
@@ -281,18 +281,101 @@ export const InventoryProduct = {
           productBarcodeId: product.product_barcode_id,
         });
 
+      if (purchase_order_item_id) {
+        const receivedResult = await client.query(
+          `
+          SELECT *
+          FROM inventory.inventory_products
+          WHERE purchase_order_item_id = $1
+          FOR UPDATE
+          LIMIT 1
+          `,
+          [Number(purchase_order_item_id)]
+        );
+
+        if (receivedResult.rows.length > 0) {
+          const realignedResult = await client.query(
+            `
+            UPDATE inventory.inventory_products
+            SET
+              product_barcode_id = $1,
+              product_code = $2,
+              product_name = $3,
+              hsn_code = $4,
+              bar_code = $5,
+              batch_id = COALESCE($6, batch_id),
+              category_id = $7,
+              brand_id = $8,
+              warehouse_id = $9,
+              mfg_date = COALESCE($10, mfg_date),
+              exp_date = $11,
+              purchase_order_id = $12,
+              supplier_id = $13,
+              stakeholders_id = $14,
+              unit_id = $15,
+              unit_price = $16,
+              remarks = COALESCE($17, remarks),
+              updated_at = now()
+            WHERE id = $18
+            RETURNING *
+            `,
+            [
+              Number(product.product_barcode_id),
+              product.product_code,
+              product.product_name,
+              product.hsn_code,
+              product.mk_barcode || product.barcode || null,
+              Number(batch_id),
+              product.category_id ? Number(product.category_id) : null,
+              product.brand_id ? Number(product.brand_id) : null,
+              Number(warehouse_id),
+              finalMfgDate,
+              finalExpDate,
+              Number(purchase_order_id),
+              supplier_id || stakeholders_id
+                ? Number(supplier_id || stakeholders_id)
+                : null,
+              stakeholders_id || supplier_id
+                ? Number(stakeholders_id || supplier_id)
+                : null,
+              product.unit_id ? Number(product.unit_id) : null,
+              price,
+              remarks || null,
+              receivedResult.rows[0].id,
+            ]
+          );
+
+          await client.query('COMMIT');
+
+          return {
+            already_received: true,
+            updated_existing: true,
+            inventoryProduct: realignedResult.rows[0],
+            total_price: realignedResult.rows[0].total_price,
+            stockTransaction: null,
+          };
+        }
+      }
+
       const existingResult = await client.query(
         `
         SELECT *
         FROM inventory.inventory_products
-        WHERE product_barcode_id = $1
-          AND exp_date::date = $2::date
-          AND warehouse_id = $3
-          AND COALESCE(is_active, true) = true
+        WHERE sku_id = $4
+           OR (
+            product_barcode_id = $1
+            AND exp_date::date = $2::date
+            AND warehouse_id = $3
+            AND COALESCE(is_active, true) = true
+          )
+        ORDER BY
+          CASE WHEN sku_id = $4 THEN 0 ELSE 1 END,
+          updated_at DESC,
+          id DESC
         FOR UPDATE
         LIMIT 1
         `,
-        [Number(product.product_barcode_id), finalExpDate, Number(warehouse_id)]
+        [Number(product.product_barcode_id), finalExpDate, Number(warehouse_id), finalSkuId]
       );
 
       let inventoryProduct;
@@ -314,10 +397,9 @@ export const InventoryProduct = {
             warehouse_id = $10,
             exp_date = $11,
             mfg_date = COALESCE($12, mfg_date),
-            sku_id = COALESCE($13, sku_id),
-            remarks = COALESCE($14, remarks),
+            remarks = COALESCE($13, remarks),
             updated_at = now()
-          WHERE id = $15
+          WHERE id = $14
           RETURNING *
           `,
           [
@@ -337,7 +419,6 @@ export const InventoryProduct = {
             Number(warehouse_id),
             finalExpDate,
             finalMfgDate,
-            finalSkuId,
             remarks || null,
             existingResult.rows[0].id,
           ]
@@ -379,6 +460,33 @@ export const InventoryProduct = {
             $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
             $21,$22,$23,$24,$25
           )
+          ON CONFLICT ON CONSTRAINT products_sku_id_key
+          DO UPDATE SET
+            count_in_stock = COALESCE(inventory.inventory_products.count_in_stock, 0) + EXCLUDED.count_in_stock,
+            no_of_units = COALESCE(inventory.inventory_products.no_of_units, 0) + EXCLUDED.no_of_units,
+            purchase_qty = COALESCE(inventory.inventory_products.purchase_qty, 0) + EXCLUDED.purchase_qty,
+            product_barcode_id = EXCLUDED.product_barcode_id,
+            product_code = EXCLUDED.product_code,
+            product_name = EXCLUDED.product_name,
+            hsn_code = EXCLUDED.hsn_code,
+            bar_code = EXCLUDED.bar_code,
+            batch_id = EXCLUDED.batch_id,
+            category_id = EXCLUDED.category_id,
+            brand_id = EXCLUDED.brand_id,
+            stakeholders_id = EXCLUDED.stakeholders_id,
+            business_entity_type = EXCLUDED.business_entity_type,
+            warehouse_id = EXCLUDED.warehouse_id,
+            mfg_date = COALESCE(EXCLUDED.mfg_date, inventory.inventory_products.mfg_date),
+            exp_date = EXCLUDED.exp_date,
+            purchase_order_id = EXCLUDED.purchase_order_id,
+            purchase_order_item_id = EXCLUDED.purchase_order_item_id,
+            supplier_id = EXCLUDED.supplier_id,
+            unit_id = EXCLUDED.unit_id,
+            unit_price = EXCLUDED.unit_price,
+            verified_by = EXCLUDED.verified_by,
+            verified_by_name = EXCLUDED.verified_by_name,
+            remarks = COALESCE(EXCLUDED.remarks, inventory.inventory_products.remarks),
+            updated_at = now()
           RETURNING *
           `,
           [

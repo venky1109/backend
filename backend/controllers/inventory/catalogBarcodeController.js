@@ -137,6 +137,40 @@ export const createCatalogBarcode = async (req, res, next) => {
       quantity: Number(quantity),
     });
 
+    const existing = await query(
+      `
+      SELECT *
+      FROM catalog.product_barcodes
+      WHERE mk_barcode = $1
+         OR (
+          product_id = $2
+          AND brand_id = $3
+          AND category_id = $4
+          AND unit_id = $5
+          AND quantity = $6
+        )
+      ORDER BY
+        CASE WHEN mk_barcode = $1 THEN 0 ELSE 1 END,
+        id DESC
+      LIMIT 1
+      `,
+      [
+        mk_barcode,
+        Number(product_id),
+        Number(brand_id),
+        Number(category_id),
+        Number(unit_id),
+        Number(quantity),
+      ]
+    );
+
+    if (existing.rows[0]) {
+      return res.status(200).json({
+        ...existing.rows[0],
+        already_exists: true,
+      });
+    }
+
     const { rows } = await query(
       `
       INSERT INTO catalog.product_barcodes
@@ -164,6 +198,53 @@ export const createCatalogBarcode = async (req, res, next) => {
 
     res.status(201).json(rows[0]);
   } catch (error) {
+    if (error?.code === '23505') {
+      try {
+        const duplicateMkBarcode = req.body.mk_barcode || makeMkBarcode({
+          product_id: Number(req.body.product_id),
+          brand_id: Number(req.body.brand_id),
+          category_id: Number(req.body.category_id),
+          unit_id: Number(req.body.unit_id),
+          quantity: Number(req.body.quantity || 1),
+        });
+
+        const existing = await query(
+          `
+          SELECT *
+          FROM catalog.product_barcodes
+          WHERE mk_barcode = $1
+             OR (
+              product_id = $2
+              AND brand_id = $3
+              AND category_id = $4
+              AND unit_id = $5
+              AND quantity = $6
+            )
+          ORDER BY id DESC
+          LIMIT 1
+          `,
+          [
+            error?.detail?.match(/\((?:mk_barcode)\)=\(([^)]+)\)/)?.[1] ||
+              duplicateMkBarcode,
+            Number(req.body.product_id),
+            Number(req.body.brand_id),
+            Number(req.body.category_id),
+            Number(req.body.unit_id),
+            Number(req.body.quantity || 1),
+          ]
+        );
+
+        if (existing.rows[0]) {
+          return res.status(200).json({
+            ...existing.rows[0],
+            already_exists: true,
+          });
+        }
+      } catch (_lookupError) {
+        // Keep the original duplicate-key error if lookup also fails.
+      }
+    }
+
     next(error);
   }
 };

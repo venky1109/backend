@@ -3,6 +3,7 @@ import slugify from 'slugify';
 
 // Define a schema for the financial details
 const financialSchema = new mongoose.Schema({
+  catalogProductBarcodeId: { type: Number, index: true },
   mkid: { type: Number, index: true },
   price: { type: Number, required: true },
   dprice: { type: Number, required: true },
@@ -22,6 +23,7 @@ const imageSchema = new mongoose.Schema({
 
 // Define a schema for the product details
 const productDetailSchema = new mongoose.Schema({
+  catalogBrandId: { type: Number, index: true },
   brand: { type: String, required: true },
   description: { type: String, required: true },
   rating: { type: Number },
@@ -32,7 +34,15 @@ const productDetailSchema = new mongoose.Schema({
 
 // Define the main product schema
 const productSchema = new mongoose.Schema({
+  catalogProductId: { type: Number, index: true },
+  catalogCategoryId: { type: Number, index: true },
+  mongoCategoryId: { type: String, index: true },
   name: { type: String, required: true },
+  productname: { type: String, index: true },
+  englishname: { type: String, index: true },
+  teluguname: { type: String, index: true },
+  hsncode: { type: String, index: true },
+  gst: { type: Number, default: 0 },
   slug: { type: String, unique: true }, 
   category: { type: String, required: true },
   rating: { type: Number },
@@ -41,8 +51,19 @@ const productSchema = new mongoose.Schema({
 });
 // Auto-generate slug from name
 productSchema.pre('save', function (next) {
-  if (this.name && !this.slug) {
-    this.slug = slugify(this.name, { lower: true, strict: true });
+  if (!this.name && this.productname) {
+    this.name = this.productname;
+  }
+
+  if (!this.productname && this.name) {
+    this.productname = this.name;
+  }
+
+  if (this.name) {
+    const baseSlug = this.catalogProductId
+      ? `${this.name}-${this.catalogProductId}`
+      : this.name;
+    this.slug = slugify(baseSlug, { lower: true, strict: true });
   }
   next();
 });

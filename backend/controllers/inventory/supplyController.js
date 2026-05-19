@@ -719,7 +719,7 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
         pb.mk_barcode,
         p.product_code,
         COALESCE(p.product_name_eng, p.product_name_tel, p.product_code) AS product_name,
-        p."hsn-code" AS hsn_code
+        p.hsncode AS hsn_code
       FROM catalog.product_barcodes pb
       JOIN catalog.products p ON p.id = pb.product_id
       WHERE pb.id = $1
