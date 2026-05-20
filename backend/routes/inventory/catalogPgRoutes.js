@@ -31,6 +31,12 @@ import {
   uploadProductImage,
   uploadProductImageFromUrl,
 } from '../../controllers/inventory/catalogImageController.js';
+import {
+  getImages,
+  createImage,
+  updateImage,
+  deleteImage,
+} from '../../controllers/inventory/catalogPgImageController.js';
 import { searchLegacyProducts } from '../../controllers/inventory/legacyProductController.js';
 
 const router = express.Router();
@@ -47,6 +53,10 @@ router.use(protectPOS);
 router.use(catalogInventoryAccess);
 
 router.post('/bills/upload', uploadBillFile, uploadBill);
+router.get('/images', getImages);
+router.post('/images', createImage);
+router.put('/images/:id', updateImage);
+router.delete('/images/:id', deleteImage);
 router.get('/product-images/search', searchProductImages);
 router.post('/product-images/upload', productImageUpload.single('image'), uploadProductImage);
 router.post('/product-images/upload-from-url', uploadProductImageFromUrl);
