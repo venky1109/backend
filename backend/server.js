@@ -21,6 +21,7 @@ import paymentPgRoutes from './routes/inventory/paymentPgRoutes.js';
 import catalogBarcodeRoutes from './routes/inventory/catalogBarcodeRoutes.js';
 import inventoryDashboardRoutes from './routes/inventory/inventoryDashboardRoutes.js';
 import requestTrackingRoutes from './routes/inventory/requestTrackingRoutes.js';
+import migrationRoutes from './routes/inventory/migrationRoutes.js';
 // import dispatchRoutes from "./routes/dispatch/dispatchRoutes.js";
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 import { Server } from 'socket.io';
@@ -148,6 +149,7 @@ app.use('/api/payments-pg', paymentPgRoutes);
 app.use('/api/catalog-pg/product-barcodes', catalogBarcodeRoutes);
 app.use('/api/inventory-dashboard', inventoryDashboardRoutes);
 app.use('/api/request-tracking', requestTrackingRoutes);
+app.use('/api/migration', migrationRoutes);
 // app.use("/api/dispatch", dispatchRoutes);
 
 

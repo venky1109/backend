@@ -578,26 +578,191 @@ export const InventoryProduct = {
 
 export const StockTransaction = {
   async findAll() {
-    const { rows } = await query(`
-      SELECT *
-      FROM inventory.stock_transaction
-      ORDER BY created_at DESC
-    `);
+    try {
+      const { rows } = await query(`
+        SELECT
+          st.*,
+          rt.request_id,
+          COALESCE(rt.product_barcode_id, ip.product_barcode_id) AS product_barcode_id
+        FROM inventory.stock_transaction st
+        LEFT JOIN LATERAL (
+          SELECT
+            r.id AS request_id,
+            r.product_barcode_id,
+            CASE
+              WHEN r.payload->>'stock_transaction_id' ~ '^[0-9]+$'
+               AND (r.payload->>'stock_transaction_id')::bigint = st.id
+              THEN 0
+              ELSE 1
+            END AS match_rank
+          FROM request_tracking.requests r
+          WHERE r.request_type = 'inventory_migration'
+            AND (
+              (
+                r.payload->>'stock_transaction_id' ~ '^[0-9]+$'
+                AND (r.payload->>'stock_transaction_id')::bigint = st.id
+              )
+              OR (
+                st.ref_type = 'PURCHASE_VERIFIED'
+                AND r.status = 'completed'
+                AND r.payload->>'purchase_order_id' = REPLACE(COALESCE(st.source, ''), 'PURCHASE_ORDER:', '')
+                AND COALESCE(r.warehouse_id::text, r.payload->>'warehouse_id') = REPLACE(COALESCE(st.destination, ''), 'WAREHOUSE:', '')
+                AND EXISTS (
+                  SELECT 1
+                  FROM catalog.product_barcodes pb
+                  WHERE pb.id = r.product_barcode_id
+                    AND pb.product_id = st.product_id
+                )
+              )
+            )
+          ORDER BY match_rank ASC, r.updated_at DESC, r.id DESC
+          LIMIT 1
+        ) rt ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT ip_inner.product_barcode_id
+          FROM inventory.inventory_products ip_inner
+          LEFT JOIN catalog.product_barcodes pb_inner
+            ON pb_inner.id = ip_inner.product_barcode_id
+          WHERE pb_inner.product_id = st.product_id
+            AND ip_inner.warehouse_id = CASE
+              WHEN st.destination ~ '^WAREHOUSE:[0-9]+$'
+              THEN REPLACE(st.destination, 'WAREHOUSE:', '')::bigint
+              ELSE ip_inner.warehouse_id
+            END
+          ORDER BY ip_inner.updated_at DESC, ip_inner.id DESC
+          LIMIT 1
+        ) ip ON TRUE
+        ORDER BY st.created_at DESC
+      `);
 
-    return rows;
+      return rows;
+    } catch (error) {
+      if (error?.code !== '42P01' || !String(error?.message || '').includes('request_tracking.')) {
+        throw error;
+      }
+
+      const { rows } = await query(`
+        SELECT
+          st.*,
+          NULL::bigint AS request_id,
+          ip.product_barcode_id
+        FROM inventory.stock_transaction st
+        LEFT JOIN LATERAL (
+          SELECT ip_inner.product_barcode_id
+          FROM inventory.inventory_products ip_inner
+          LEFT JOIN catalog.product_barcodes pb_inner
+            ON pb_inner.id = ip_inner.product_barcode_id
+          WHERE pb_inner.product_id = st.product_id
+            AND ip_inner.warehouse_id = CASE
+              WHEN st.destination ~ '^WAREHOUSE:[0-9]+$'
+              THEN REPLACE(st.destination, 'WAREHOUSE:', '')::bigint
+              ELSE ip_inner.warehouse_id
+            END
+          ORDER BY ip_inner.updated_at DESC, ip_inner.id DESC
+          LIMIT 1
+        ) ip ON TRUE
+        ORDER BY st.created_at DESC
+      `);
+
+      return rows;
+    }
   },
 
   async findById(id) {
-    const { rows } = await query(
-      `
-      SELECT *
-      FROM inventory.stock_transaction
-      WHERE id = $1
-      `,
-      [Number(id)]
-    );
+    try {
+      const { rows } = await query(
+        `
+        SELECT
+          st.*,
+          rt.request_id,
+          COALESCE(rt.product_barcode_id, ip.product_barcode_id) AS product_barcode_id
+        FROM inventory.stock_transaction st
+        LEFT JOIN LATERAL (
+          SELECT
+            r.id AS request_id,
+            r.product_barcode_id,
+            CASE
+              WHEN r.payload->>'stock_transaction_id' ~ '^[0-9]+$'
+               AND (r.payload->>'stock_transaction_id')::bigint = st.id
+              THEN 0
+              ELSE 1
+            END AS match_rank
+          FROM request_tracking.requests r
+          WHERE r.request_type = 'inventory_migration'
+            AND (
+              (
+                r.payload->>'stock_transaction_id' ~ '^[0-9]+$'
+                AND (r.payload->>'stock_transaction_id')::bigint = st.id
+              )
+              OR (
+                st.ref_type = 'PURCHASE_VERIFIED'
+                AND r.status = 'completed'
+                AND r.payload->>'purchase_order_id' = REPLACE(COALESCE(st.source, ''), 'PURCHASE_ORDER:', '')
+                AND COALESCE(r.warehouse_id::text, r.payload->>'warehouse_id') = REPLACE(COALESCE(st.destination, ''), 'WAREHOUSE:', '')
+                AND EXISTS (
+                  SELECT 1
+                  FROM catalog.product_barcodes pb
+                  WHERE pb.id = r.product_barcode_id
+                    AND pb.product_id = st.product_id
+                )
+              )
+            )
+          ORDER BY match_rank ASC, r.updated_at DESC, r.id DESC
+          LIMIT 1
+        ) rt ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT ip_inner.product_barcode_id
+          FROM inventory.inventory_products ip_inner
+          LEFT JOIN catalog.product_barcodes pb_inner
+            ON pb_inner.id = ip_inner.product_barcode_id
+          WHERE pb_inner.product_id = st.product_id
+            AND ip_inner.warehouse_id = CASE
+              WHEN st.destination ~ '^WAREHOUSE:[0-9]+$'
+              THEN REPLACE(st.destination, 'WAREHOUSE:', '')::bigint
+              ELSE ip_inner.warehouse_id
+            END
+          ORDER BY ip_inner.updated_at DESC, ip_inner.id DESC
+          LIMIT 1
+        ) ip ON TRUE
+        WHERE st.id = $1
+        `,
+        [Number(id)]
+      );
 
-    return rows[0];
+      return rows[0];
+    } catch (error) {
+      if (error?.code !== '42P01' || !String(error?.message || '').includes('request_tracking.')) {
+        throw error;
+      }
+
+      const { rows } = await query(
+        `
+        SELECT
+          st.*,
+          NULL::bigint AS request_id,
+          ip.product_barcode_id
+        FROM inventory.stock_transaction st
+        LEFT JOIN LATERAL (
+          SELECT ip_inner.product_barcode_id
+          FROM inventory.inventory_products ip_inner
+          LEFT JOIN catalog.product_barcodes pb_inner
+            ON pb_inner.id = ip_inner.product_barcode_id
+          WHERE pb_inner.product_id = st.product_id
+            AND ip_inner.warehouse_id = CASE
+              WHEN st.destination ~ '^WAREHOUSE:[0-9]+$'
+              THEN REPLACE(st.destination, 'WAREHOUSE:', '')::bigint
+              ELSE ip_inner.warehouse_id
+            END
+          ORDER BY ip_inner.updated_at DESC, ip_inner.id DESC
+          LIMIT 1
+        ) ip ON TRUE
+        WHERE st.id = $1
+        `,
+        [Number(id)]
+      );
+
+      return rows[0];
+    }
   },
 
   async create(data) {

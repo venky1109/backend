@@ -2,7 +2,13 @@ import asyncHandler from '../../middleware/asyncHandler.js';
 import { RequestTracking } from '../../models/inventory/requestTrackingModel.js';
 
 export const getRequestFlows = asyncHandler(async (req, res) => {
-  await RequestTracking.syncPendingDispatchReceiveRequests();
+  if (
+    !['inventory_migration', 'product_migration_rollback'].includes(
+      req.query?.request_type
+    )
+  ) {
+    await RequestTracking.syncPendingDispatchReceiveRequests();
+  }
 
   const rows = await RequestTracking.findAll(req.query);
 

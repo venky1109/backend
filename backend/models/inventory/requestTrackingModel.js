@@ -158,7 +158,7 @@ const inventoryMigrationRequestKey = (data = {}, inventoryProduct = null) => {
   ].join(':')}`;
 };
 
-const buildInventoryMigrationPayload = async (db, data = {}, inventoryProduct = null) => {
+const buildInventoryMigrationPayload = async (db, data = {}, inventoryProduct = null, stockTransaction = null) => {
   const productBarcodeId = Number(data.product_barcode_id || inventoryProduct?.product_barcode_id);
   const quantity = toNumber(data.no_of_units ?? data.qty ?? inventoryProduct?.no_of_units, 0);
   const unitPrice = toNumber(data.unit_price ?? inventoryProduct?.unit_price, 0);
@@ -171,6 +171,7 @@ const buildInventoryMigrationPayload = async (db, data = {}, inventoryProduct = 
     sku_id: data.sku_id || inventoryProduct?.sku_id || null,
     exp_date: data.exp_date || inventoryProduct?.exp_date || null,
     warehouse_id: data.warehouse_id ? Number(data.warehouse_id) : inventoryProduct?.warehouse_id || null,
+    stock_transaction_id: stockTransaction?.id ? Number(stockTransaction.id) : null,
     items: [],
   };
 
@@ -795,8 +796,9 @@ export const RequestTracking = {
 
   async upsertInventoryMigrationRequest(data = {}, result = {}, { requestedBy, status = 'completed', error } = {}) {
     const inventoryProduct = result.inventoryProduct || null;
+    const stockTransaction = result.stockTransaction || null;
     const requestKey = inventoryMigrationRequestKey(data, inventoryProduct);
-    const payload = await buildInventoryMigrationPayload(null, data, inventoryProduct);
+    const payload = await buildInventoryMigrationPayload(null, data, inventoryProduct, stockTransaction);
     const finalStatus = error ? 'failed' : status;
     const errorCode = error?.code || error?.name || null;
     const errorMessage = error?.message || null;
