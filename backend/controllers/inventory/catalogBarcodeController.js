@@ -57,29 +57,42 @@ export const decodeMkBarcode = (code) => {
 export const updateCatalogBarcode = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
+  const allowedFields = [
+    'product_id',
+    'brand_id',
+    'category_id',
+    'unit_id',
+    'quantity',
+    'barcode',
+    'mk_barcode',
+    'image_url',
+  ];
+
+  const updates = allowedFields.filter((field) =>
+    Object.prototype.hasOwnProperty.call(req.body, field)
+  );
+
+  if (!updates.length) {
+    res.status(400);
+    throw new Error('No valid product barcode fields provided');
+  }
+
+  const setClause = updates
+    .map((field, index) => `${field} = $${index + 1}`)
+    .join(',\n      ');
+  const values = updates.map((field) => req.body[field]);
+
   const result = await query(
     `
     UPDATE catalog.product_barcodes
     SET
-      product_id = $1,
-      brand_id = $2,
-      category_id = $3,
-      unit_id = $4,
-      quantity = $5,
-      barcode = $6,
-      mk_barcode = $7,
+      ${setClause},
       updated_at = NOW()
-    WHERE id = $8
+    WHERE id = $${values.length + 1}
     RETURNING *
     `,
     [
-      req.body.product_id,
-      req.body.brand_id,
-      req.body.category_id,
-      req.body.unit_id,
-      req.body.quantity,
-      req.body.barcode,
-      req.body.mk_barcode,
+      ...values,
       id,
     ]
   );
