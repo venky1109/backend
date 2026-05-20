@@ -53,6 +53,32 @@ const makeSkuId = ({ productCode, batchId, expDate, productBarcodeId }) => {
   return `${code}-${barcodePart}-B${batch}-${expiry}`;
 };
 
+const normalizeName = (value) => {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+};
+
+const validateCatalogSelection = (data, product) => {
+  if (data.product_id && Number(data.product_id) !== Number(product.product_id)) {
+    throw new Error('product_id does not match selected product_barcode_id');
+  }
+
+  const sentName = normalizeName(
+    data.product_name ||
+      data.productName ||
+      data.product_name_eng ||
+      data.productNameEng
+  );
+
+  if (sentName && sentName !== normalizeName(product.product_name)) {
+    throw new Error(
+      `product_name does not match selected product_barcode_id. Barcode ${product.product_barcode_id} belongs to ${product.product_name}`
+    );
+  }
+};
+
 export const InventoryProduct = {
   async findAll() {
     const { rows } = await query(`
@@ -268,13 +294,12 @@ export const InventoryProduct = {
         throw new Error('Product barcode row not found');
       }
 
-      if (product_id && Number(product_id) !== Number(product.product_id)) {
-        throw new Error('product_id does not match selected product_barcode_id');
-      }
+      validateCatalogSelection(data, product);
 
       const finalSkuId =
-        sku_id ||
-        makeSkuId({
+        sku_id && String(sku_id).includes(`PB${product.product_barcode_id}`)
+          ? sku_id
+          : makeSkuId({
           productCode: product.product_code,
           batchId: batch_id,
           expDate: finalExpDate,
@@ -361,21 +386,23 @@ export const InventoryProduct = {
         `
         SELECT *
         FROM inventory.inventory_products
-        WHERE sku_id = $4
-           OR (
-            product_barcode_id = $1
-            AND exp_date::date = $2::date
-            AND warehouse_id = $3
-            AND COALESCE(is_active, true) = true
-          )
+        WHERE product_barcode_id = $1
+          AND exp_date::date = $2::date
+          AND warehouse_id = $3
+          AND batch_id = $4
+          AND COALESCE(is_active, true) = true
         ORDER BY
-          CASE WHEN sku_id = $4 THEN 0 ELSE 1 END,
           updated_at DESC,
           id DESC
         FOR UPDATE
         LIMIT 1
         `,
-        [Number(product.product_barcode_id), finalExpDate, Number(warehouse_id), finalSkuId]
+        [
+          Number(product.product_barcode_id),
+          finalExpDate,
+          Number(warehouse_id),
+          Number(batch_id),
+        ]
       );
 
       let inventoryProduct;

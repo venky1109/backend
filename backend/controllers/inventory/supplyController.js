@@ -16,6 +16,39 @@ const getLineTotal = (item) => {
   return Number(item.no_of_units || 1) * getEffectivePrice(item);
 };
 
+const normalizeName = (value) => {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+};
+
+const makeInventorySkuId = ({ productCode, batchId, expDate, productBarcodeId }) => {
+  const code = String(productCode || 'MKP').replace(/\s+/g, '');
+  const batch = String(batchId || Date.now()).replace(/\s+/g, '');
+  const expiry = expDate ? String(expDate).replaceAll('-', '') : 'NOEXP';
+  return `${code}-PB${productBarcodeId || 'NA'}-B${batch}-${expiry}`;
+};
+
+const validateCatalogSelection = (data, product) => {
+  if (data.product_id && Number(data.product_id) !== Number(product.product_id)) {
+    throw new Error('product_id does not match selected product_barcode_id');
+  }
+
+  const sentName = normalizeName(
+    data.product_name ||
+      data.productName ||
+      data.product_name_eng ||
+      data.productNameEng
+  );
+
+  if (sentName && sentName !== normalizeName(product.product_name)) {
+    throw new Error(
+      `product_name does not match selected product_barcode_id. Barcode ${product.product_barcode_id} belongs to ${product.product_name}`
+    );
+  }
+};
+
 export const getSupplierProducts = async (req, res, next) => {
   try {
     const supplierId = req.params.supplierId;
@@ -737,21 +770,44 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
       });
     }
 
-    if (product_id && Number(product_id) !== Number(product.product_id)) {
+    try {
+      validateCatalogSelection(req.body, product);
+    } catch (validationError) {
       await client.query('ROLLBACK');
       return res.status(400).json({
-        message: 'product_id does not match selected product_barcode_id',
+        message: validationError.message,
       });
     }
+
+    const finalSkuId =
+      sku_id && String(sku_id).includes(`PB${product.product_barcode_id}`)
+        ? sku_id
+        : makeInventorySkuId({
+            productCode: product.product_code,
+            batchId: batch_id,
+            expDate: exp_date,
+            productBarcodeId: product.product_barcode_id,
+          });
 
     const existing = await client.query(
       `
       SELECT *
       FROM inventory.inventory_products
-      WHERE sku_id = $1
+      WHERE product_barcode_id = $1
+        AND warehouse_id = $2
+        AND batch_id = $3
+        AND exp_date::date = $4::date
+        AND COALESCE(is_active, true) = true
+      ORDER BY updated_at DESC, id DESC
+      FOR UPDATE
       LIMIT 1
       `,
-      [sku_id]
+      [
+        Number(product.product_barcode_id),
+        Number(warehouse_id),
+        Number(batch_id),
+        exp_date,
+      ]
     );
 
     let inventoryProduct;
@@ -769,7 +825,7 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
             mfg_date = $6,
             remarks = $7,
             updated_at = NOW()
-        WHERE sku_id = $8
+        WHERE id = $8
         RETURNING *
         `,
         [
@@ -780,7 +836,7 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
           exp_date,
           mfg_date || null,
           remarks || null,
-          sku_id,
+          existing.rows[0].id,
         ]
       );
 
@@ -792,7 +848,7 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
           product_barcode_id,
           product_code,
           product_name,
-          sku_id,
+          finalSkuId,
           hsn_code,
           bar_code,
           batch_id,
