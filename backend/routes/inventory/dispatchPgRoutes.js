@@ -9,6 +9,7 @@ import {
   updateDispatchStatus,
   deleteDispatchOrder,
   receivedDispatchToOutletMongoStock,
+  receivedDispatchByStakeholder,
 } from '../../controllers/inventory/dispatchController.js';
 
 import {
@@ -24,6 +25,8 @@ router.use(catalogInventoryAccess);
 router.route('/orders').get(getDispatchOrders).post(createDispatchOrder);
 
 router.put('/orders/:id/received-to-outlet', receivedDispatchToOutletMongoStock);
+router.put('/orders/:id/received-by-stakeholder', receivedDispatchByStakeholder);
+router.put('/orders/:id/received-to-stakeholder', receivedDispatchByStakeholder);
 
 router.route('/orders/:id').get(getDispatchOrderById).put(updateDispatchOrder).delete(deleteDispatchOrder);
 

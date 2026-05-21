@@ -268,6 +268,7 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
     'packed',
     'dispatched',
     'received_to_outlet',
+    'received_by_stakeholder',
     'cancelled',
   ];
 
@@ -298,7 +299,7 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
       throw new Error('Dispatch order not found');
     }
 
-    if (existing.dispatch_status === 'received_to_outlet') {
+    if (['received_to_outlet', 'received_by_stakeholder'].includes(existing.dispatch_status)) {
       res.status(400);
       throw new Error('Received dispatch cannot be changed');
     }
@@ -321,6 +322,11 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
     if (dispatch_status === 'received_to_outlet') {
       res.status(400);
       throw new Error('Use receive-to-outlet endpoint to receive dispatch');
+    }
+
+    if (dispatch_status === 'received_by_stakeholder') {
+      res.status(400);
+      throw new Error('Use receive-by-stakeholder endpoint to receive dispatch');
     }
 
     if (dispatch_status === 'dispatched') {
@@ -784,6 +790,87 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       console.error('Failed to track outlet receive failure:', trackingError.message);
     }
 
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+export const receivedDispatchByStakeholder = asyncHandler(async (req, res) => {
+  const dispatchOrderId = Number(req.params.id);
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const orderResult = await client.query(
+      `
+      SELECT *
+      FROM dispatch.dispatch_order
+      WHERE id = $1
+      FOR UPDATE
+      `,
+      [dispatchOrderId]
+    );
+
+    const dispatchOrder = orderResult.rows[0];
+
+    if (!dispatchOrder) {
+      res.status(404);
+      throw new Error('Dispatch order not found');
+    }
+
+    if (dispatchOrder.dispatch_status === 'received_by_stakeholder') {
+      res.status(400);
+      throw new Error('Dispatch already received by stakeholder');
+    }
+
+    if (dispatchOrder.dispatch_status !== 'dispatched') {
+      res.status(400);
+      throw new Error('Only dispatched orders can be received by stakeholder');
+    }
+
+    const destinationType = String(dispatchOrder.destination || '')
+      .split(':')[0]
+      .toLowerCase();
+
+    if (!['stakeholder', 'vendor', 'customer'].includes(destinationType)) {
+      res.status(400);
+      throw new Error('Only stakeholder/vendor/customer dispatch can be received here');
+    }
+
+    await client.query(
+      `
+      UPDATE inventory.transit_products
+      SET
+        transit_status = 'reached',
+        updated_at = NOW()
+      WHERE dispatch_order_id = $1
+      `,
+      [dispatchOrderId]
+    );
+
+    const updatedOrderResult = await client.query(
+      `
+      UPDATE dispatch.dispatch_order
+      SET
+        dispatch_status = 'received_by_stakeholder',
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+      `,
+      [dispatchOrderId]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: 'Dispatch received by stakeholder successfully',
+      order: updatedOrderResult.rows[0],
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
     throw error;
   } finally {
     client.release();
