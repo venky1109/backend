@@ -1,6 +1,5 @@
 import asyncHandler from '../middleware/asyncHandler.js';
 import Product from '../models/productModel.js';
-import { assignFinancialMkIds } from '../utils/financialMkid.js';
 import mongoose from 'mongoose';
 
 const findMatchingFinancialByBarcode = (product, barcode) => {
@@ -32,6 +31,15 @@ const withCatalogBarcodeIdAsMkid = (product) => {
         mkid: financial.catalogProductBarcodeId ?? financial.mkid,
       })),
     })),
+  };
+};
+
+const financialWithCatalogBarcodeIdAsMkid = (financial) => {
+  const payload = financial?.toObject ? financial.toObject() : financial;
+
+  return {
+    ...payload,
+    mkid: payload.catalogProductBarcodeId ?? payload.mkid,
   };
 };
 
@@ -127,8 +135,6 @@ const getProducts = asyncHandler(async (req, res) => {
       }
     : {};
 
-  await assignFinancialMkIds(Product);
-
   const count = await Product.countDocuments({ ...keyword });
   const products = await Product.find({ ...keyword })
     .sort({ category: 1, name: 1 })
@@ -178,8 +184,6 @@ export const getProductsByCategory = asyncHandler(async (req, res) => {
     const pageSize = Number(process.env.PAGINATION_LIMIT) || 10; // Default page size if not set
     const page = Number(req.query.pageNumber) || 1; // Default to page 1 if not specified
 
-    await assignFinancialMkIds(Product);
-
     // Find products by category
     const products = await Product.find({ category })
       .sort({ name: 1 })
@@ -226,8 +230,6 @@ const getProductBySlug = asyncHandler(async (req, res) => {
   // console.log("Incoming Request Params:", req.params);  // ✅ Debugging log
 
   // Find the product by slug instead of ID
-  await assignFinancialMkIds(Product);
-
   const lookupValue = String(req.params.slug || '').trim();
   const barcodeToFind = lookupValue.split(',')[0];
   const catalogBarcodeId = Number(lookupValue);
@@ -411,8 +413,6 @@ const getFinancialDetails = async (req, res) => {
   const { productId, id: detailId, financialId } = req.params; // Destructure params
 
   try {
-    await assignFinancialMkIds(Product);
-
     // Find the product by productId
     const product = await Product.findById(productId);
 
@@ -425,7 +425,7 @@ const getFinancialDetails = async (req, res) => {
         const financialDetail = detail.financials.id(financialId);
 
         if (financialDetail) {
-          res.status(200).json(financialDetail); // Send the financial detail as a response
+          res.status(200).json(financialWithCatalogBarcodeIdAsMkid(financialDetail)); // Send the financial detail as a response
         } else {
           res.status(404).json({ message: 'Financial detail not found' });
         }
@@ -452,8 +452,6 @@ const getBatchFinancialDetails = async (req, res) => {
     if (!items || !Array.isArray(items)) {
       return res.status(400).json({ message: 'Invalid request, items array is required' });
     }
-
-    await assignFinancialMkIds(Product);
 
     // Fetch the financial details for the items in the batch
     const financialDetails = await Promise.all(
@@ -719,8 +717,6 @@ const createProductReview = asyncHandler(async (req, res) => {
 // @route   GET /api/products/top
 // @access  Public
 const getTopProducts = asyncHandler(async (req, res) => {
-  await assignFinancialMkIds(Product);
-
   const products = await Product.find({}).sort({ rating: -1 }).limit(3);
 
   res.json(products.map(withCatalogBarcodeIdAsMkid));
@@ -933,7 +929,7 @@ const updateStockById = asyncHandler(async (req, res) => {
     financialID,
     newQuantity: finalCountInStock,
     countInStock: financial?.countInStock,
-    financial,
+    financial: financial ? financialWithCatalogBarcodeIdAsMkid(financial) : financial,
   });
 });
 

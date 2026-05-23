@@ -267,7 +267,7 @@ export const getCatalogBarcodes = async (req, res, next) => {
     const { rows } = await query(`
       SELECT
         pb.*,
-        pbr.mkid,
+        pb.id AS mkid,
         p.product_name_eng,
         p.product_code,
         b.brand_name_english,
@@ -275,24 +275,6 @@ export const getCatalogBarcodes = async (req, res, next) => {
         u.unit_name,
         u.unit_short_code
       FROM catalog.product_barcodes pb
-      LEFT JOIN (
-        SELECT
-          pb_inner.id,
-          ROW_NUMBER() OVER (
-            ORDER BY
-              COALESCE(c_inner.category_name_english, c_inner.category_name_telugu, ''),
-              COALESCE(p_inner.product_name_eng, p_inner.product_name_tel, p_inner.product_code, ''),
-              COALESCE(b_inner.brand_name_english, b_inner.brand_name_telugu, ''),
-              COALESCE(pb_inner.quantity, 0),
-              COALESCE(u_inner.unit_short_code, u_inner.unit_name, ''),
-              pb_inner.id
-          ) AS mkid
-        FROM catalog.product_barcodes pb_inner
-        LEFT JOIN catalog.products p_inner ON p_inner.id = pb_inner.product_id
-        LEFT JOIN catalog.brands b_inner ON b_inner.id = pb_inner.brand_id
-        LEFT JOIN catalog.categories c_inner ON c_inner.id = pb_inner.category_id
-        LEFT JOIN catalog.units u_inner ON u_inner.id = pb_inner.unit_id
-      ) pbr ON pbr.id = pb.id
       LEFT JOIN catalog.products p ON p.id = pb.product_id
       LEFT JOIN catalog.brands b ON b.id = pb.brand_id
       LEFT JOIN catalog.categories c ON c.id = pb.category_id
@@ -314,7 +296,7 @@ export const getCatalogBarcodeByCode = async (req, res, next) => {
       `
       SELECT
         pb.*,
-        pbr.mkid,
+        pb.id AS mkid,
         p.product_name_eng,
         p.product_code,
         b.brand_name_english,
@@ -322,24 +304,6 @@ export const getCatalogBarcodeByCode = async (req, res, next) => {
         u.unit_name,
         u.unit_short_code
       FROM catalog.product_barcodes pb
-      LEFT JOIN (
-        SELECT
-          pb_inner.id,
-          ROW_NUMBER() OVER (
-            ORDER BY
-              COALESCE(c_inner.category_name_english, c_inner.category_name_telugu, ''),
-              COALESCE(p_inner.product_name_eng, p_inner.product_name_tel, p_inner.product_code, ''),
-              COALESCE(b_inner.brand_name_english, b_inner.brand_name_telugu, ''),
-              COALESCE(pb_inner.quantity, 0),
-              COALESCE(u_inner.unit_short_code, u_inner.unit_name, ''),
-              pb_inner.id
-          ) AS mkid
-        FROM catalog.product_barcodes pb_inner
-        LEFT JOIN catalog.products p_inner ON p_inner.id = pb_inner.product_id
-        LEFT JOIN catalog.brands b_inner ON b_inner.id = pb_inner.brand_id
-        LEFT JOIN catalog.categories c_inner ON c_inner.id = pb_inner.category_id
-        LEFT JOIN catalog.units u_inner ON u_inner.id = pb_inner.unit_id
-      ) pbr ON pbr.id = pb.id
       LEFT JOIN catalog.products p ON p.id = pb.product_id
       LEFT JOIN catalog.brands b ON b.id = pb.brand_id
       LEFT JOIN catalog.categories c ON c.id = pb.category_id

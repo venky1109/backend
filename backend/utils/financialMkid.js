@@ -1,67 +1,34 @@
-const compareText = (left, right) =>
-  String(left || '').localeCompare(String(right || ''), undefined, {
-    numeric: true,
-    sensitivity: 'base',
-  });
-
-const compareNumber = (left, right) => Number(left || 0) - Number(right || 0);
-
-const compareFinancialRows = (left, right) =>
-  compareText(left.category, right.category) ||
-  compareText(left.productName, right.productName) ||
-  compareText(left.brand, right.brand) ||
-  compareNumber(left.quantity, right.quantity) ||
-  compareText(left.units, right.units) ||
-  compareNumber(left.dprice, right.dprice) ||
-  compareNumber(left.price, right.price) ||
-  compareText(left.financialId, right.financialId);
-
 export const assignFinancialMkIds = async (Product) => {
-  const products = await Product.find({});
-  const rows = [];
+  const products = await Product.find({
+    'details.financials.catalogProductBarcodeId': { $exists: true },
+  });
+  const updates = [];
+  let totalFinancials = 0;
 
   products.forEach((product) => {
     product.details?.forEach((detail) => {
       detail.financials?.forEach((financial) => {
-        rows.push({
-          product,
-          detail,
-          financial,
-          category: product.category,
-          productName: product.name,
-          brand: detail.brand,
-          quantity: financial.quantity,
-          units: financial.units,
-          dprice: financial.dprice,
-          price: financial.price,
-          financialId: financial._id?.toString(),
+        totalFinancials += 1;
+
+        const nextMkid = Number(financial.catalogProductBarcodeId);
+        if (!Number.isFinite(nextMkid) || financial.mkid === nextMkid) return;
+
+        updates.push({
+          updateOne: {
+            filter: { _id: product._id },
+            update: {
+              $set: {
+                'details.$[detail].financials.$[financial].mkid': nextMkid,
+              },
+            },
+            arrayFilters: [
+              { 'detail._id': detail._id },
+              { 'financial._id': financial._id },
+            ],
+          },
         });
       });
     });
-  });
-
-  rows.sort(compareFinancialRows);
-
-  const updates = [];
-  rows.forEach((row, index) => {
-    const nextMkid = index + 1;
-    if (row.financial.mkid !== nextMkid) {
-      row.financial.mkid = nextMkid;
-      updates.push({
-        updateOne: {
-          filter: { _id: row.product._id },
-          update: {
-            $set: {
-              'details.$[detail].financials.$[financial].mkid': nextMkid,
-            },
-          },
-          arrayFilters: [
-            { 'detail._id': row.detail._id },
-            { 'financial._id': row.financial._id },
-          ],
-        },
-      });
-    }
   });
 
   if (updates.length > 0) {
@@ -69,25 +36,26 @@ export const assignFinancialMkIds = async (Product) => {
   }
 
   return {
-    totalFinancials: rows.length,
+    totalFinancials,
     updatedFinancials: updates.length,
   };
 };
 
 export const findFinancialByMkid = async (Product, mkid) => {
-  const numericMkid = Number(mkid);
-  if (!Number.isInteger(numericMkid) || numericMkid < 1) return null;
-
-  await assignFinancialMkIds(Product);
+  const catalogProductBarcodeId = Number(mkid);
+  if (!Number.isInteger(catalogProductBarcodeId) || catalogProductBarcodeId < 1) return null;
 
   const product = await Product.findOne({
-    'details.financials.mkid': numericMkid,
+    'details.financials.catalogProductBarcodeId': catalogProductBarcodeId,
   });
 
   if (!product) return null;
 
   for (const detail of product.details || []) {
-    const financial = detail.financials?.find((item) => item.mkid === numericMkid);
+    const financial = detail.financials?.find(
+      (item) => Number(item.catalogProductBarcodeId) === catalogProductBarcodeId
+    );
+
     if (financial) {
       return { product, detail, financial };
     }

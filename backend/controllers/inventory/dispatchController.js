@@ -1587,7 +1587,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         detail.financials.push({
           _id: new mongoose.Types.ObjectId(),
           catalogProductBarcodeId: Number(item.catalog_product_barcode_id),
-          mkid: Number(item.mk_barcode || 0) || undefined,
+          mkid: Number(item.catalog_product_barcode_id),
           price: unitPrice,
           dprice: sellingPrice,
           Discount: discount,
