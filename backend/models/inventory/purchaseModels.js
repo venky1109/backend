@@ -15,6 +15,7 @@ export const PurchaseOrder = new BasePgModel('purchases.purchase_order', [
 
 export const PurchaseOrderItem = new BasePgModel('purchases.purchase_order_items', [
   'purchase_order_id',
+  'product_barcode_id',
   'product_id',
   'brand_id',
   'qty',

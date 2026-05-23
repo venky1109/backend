@@ -145,7 +145,7 @@ export const InventoryDashboard = {
       LEFT JOIN catalog.brands b ON b.id = doi.brand_id
       LEFT JOIN catalog.units u ON u.id = COALESCE(pb.unit_id, doi.unit_id)
       WHERE d.created_at BETWEEN $1 AND $2
-        AND d.dispatch_status IN ('dispatched', 'received_to_outlet')
+        AND d.dispatch_status IN ('dispatched', 'received_to_outlet', 'received_to_warehouse')
       GROUP BY doi.product_id, doi.product_barcode_id, name, brand, pb.quantity, units
       ORDER BY total_qty DESC, dispatch_value DESC, name ASC
       LIMIT $3
@@ -250,7 +250,7 @@ export const InventoryDashboard = {
         FROM dispatch.dispatch_order d
         JOIN dispatch.dispatch_order_items doi ON doi.dispatch_order_id = d.id
         WHERE d.created_at BETWEEN $1 AND $2
-          AND d.dispatch_status IN ('dispatched', 'received_to_outlet')
+          AND d.dispatch_status IN ('dispatched', 'received_to_outlet', 'received_to_warehouse')
         GROUP BY doi.product_barcode_id
       ),
       current_stock AS (
@@ -466,7 +466,7 @@ export const InventoryDashboard = {
           AND ip.exp_date::date = doi.exp_date::date
       ) ip ON true
       WHERE d.created_at BETWEEN $1 AND $2
-        AND d.dispatch_status IN ('dispatched', 'received_to_outlet')
+        AND d.dispatch_status IN ('dispatched', 'received_to_outlet', 'received_to_warehouse')
       `,
       [startDate, endDate]
     );
@@ -606,7 +606,7 @@ export const InventoryDashboard = {
           AND ip.exp_date::date = doi.exp_date::date
       ) ip ON true
       WHERE d.created_at BETWEEN $1 AND $2
-        AND d.dispatch_status IN ('dispatched', 'received_to_outlet')
+        AND d.dispatch_status IN ('dispatched', 'received_to_outlet', 'received_to_warehouse')
       `,
       [startDate, endDate]
     );

@@ -12,6 +12,8 @@ CHECK (
     'dispatched',
     'received_to_outlet',
     'received_by_stakeholder',
+    'received_to_warehouse',
     'cancelled'
   )
 );
+

@@ -6,20 +6,68 @@ const toPgDate = (value) => {
   return match ? match[0] : null;
 };
 
+const toJsonArray = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+};
+
+const getPackingConfigurations = (item = {}) =>
+  toJsonArray(item.packing_configurations ?? item.packingConfigurations ?? item.packing_configs);
+
+let packingConfigsColumnReady;
+
+export const ensureDispatchPackingConfigsColumn = async () => {
+  if (!packingConfigsColumnReady) {
+    packingConfigsColumnReady = query(`
+      ALTER TABLE dispatch.dispatch_order_items
+      ADD COLUMN IF NOT EXISTS packing_configs JSONB NOT NULL DEFAULT '[]'::jsonb
+    `).then(() => query(`
+      ALTER TABLE dispatch.dispatch_order_items
+      ADD COLUMN IF NOT EXISTS inventory_product_id BIGINT
+    `).catch((error) => {
+      packingConfigsColumnReady = null;
+      throw error;
+    }));
+  }
+
+  await packingConfigsColumnReady;
+};
+
 export const DispatchOrder = {
   async findAll(limit = 100, offset = 0) {
+    await ensureDispatchPackingConfigsColumn();
+
     const { rows } = await query(
       `
       SELECT 
         d.*,
+        tp.transit_status,
+        w.id AS source_warehouse_id,
+        w.warehouse_code AS source_warehouse_code,
+        w.warehouse_name AS source_warehouse_name,
         COALESCE(
           json_agg(
             json_build_object(
               'id', i.id,
               'dispatch_order_id', i.dispatch_order_id,
               'product_barcode_id', i.product_barcode_id,
+              'inventory_product_id', i.inventory_product_id,
               'mk_barcode', pb.mk_barcode,
-              'barcode', pb.barcode,
+              'barcode', COALESCE(pb.barcode, pb.mk_barcode),
               'barcode_quantity', pb.quantity,
               'product_id', i.product_id,
               'brand_id', i.brand_id,
@@ -27,6 +75,8 @@ export const DispatchOrder = {
               'unit_id', i.unit_id,
               'qty', i.qty,
               'no_of_units', i.no_of_units,
+              'packing_configs', COALESCE(i.packing_configs, '[]'::jsonb),
+              'packing_configurations', COALESCE(i.packing_configs, '[]'::jsonb),
               'exp_date', to_char(i.exp_date::date, 'YYYY-MM-DD'),
               'notes', i.notes,
               'product_code', p.product_code,
@@ -46,13 +96,17 @@ export const DispatchOrder = {
           '[]'
         ) AS items
       FROM dispatch.dispatch_order d
+      LEFT JOIN inventory.transit_products tp ON tp.dispatch_order_id = d.id
+      LEFT JOIN catalog.warehouses w
+        ON split_part(COALESCE(d.source, ''), ':', 1) = 'warehouse'
+       AND w.id = (regexp_match(COALESCE(d.source, ''), '^warehouse:([0-9]+)'))[1]::bigint
       LEFT JOIN dispatch.dispatch_order_items i ON i.dispatch_order_id = d.id
       LEFT JOIN catalog.product_barcodes pb ON pb.id = i.product_barcode_id
       LEFT JOIN catalog.products p ON p.id = i.product_id
       LEFT JOIN catalog.brands b ON b.id = i.brand_id
       LEFT JOIN catalog.categories c ON c.id = i.category_id
       LEFT JOIN catalog.units u ON u.id = i.unit_id
-      GROUP BY d.id
+      GROUP BY d.id, tp.transit_status, w.id, w.warehouse_code, w.warehouse_name
       ORDER BY d.id DESC
       LIMIT $1 OFFSET $2
       `,
@@ -63,18 +117,25 @@ export const DispatchOrder = {
   },
 
   async findById(id) {
+    await ensureDispatchPackingConfigsColumn();
+
     const { rows } = await query(
       `
       SELECT 
         d.*,
+        tp.transit_status,
+        w.id AS source_warehouse_id,
+        w.warehouse_code AS source_warehouse_code,
+        w.warehouse_name AS source_warehouse_name,
         COALESCE(
           json_agg(
             json_build_object(
               'id', i.id,
               'dispatch_order_id', i.dispatch_order_id,
               'product_barcode_id', i.product_barcode_id,
+              'inventory_product_id', i.inventory_product_id,
               'mk_barcode', pb.mk_barcode,
-              'barcode', pb.barcode,
+              'barcode', COALESCE(pb.barcode, pb.mk_barcode),
               'barcode_quantity', pb.quantity,
               'product_id', i.product_id,
               'brand_id', i.brand_id,
@@ -82,6 +143,8 @@ export const DispatchOrder = {
               'unit_id', i.unit_id,
               'qty', i.qty,
               'no_of_units', i.no_of_units,
+              'packing_configs', COALESCE(i.packing_configs, '[]'::jsonb),
+              'packing_configurations', COALESCE(i.packing_configs, '[]'::jsonb),
               'exp_date', to_char(i.exp_date::date, 'YYYY-MM-DD'),
               'notes', i.notes,
               'product_code', p.product_code,
@@ -101,6 +164,10 @@ export const DispatchOrder = {
           '[]'
         ) AS items
       FROM dispatch.dispatch_order d
+      LEFT JOIN inventory.transit_products tp ON tp.dispatch_order_id = d.id
+      LEFT JOIN catalog.warehouses w
+        ON split_part(COALESCE(d.source, ''), ':', 1) = 'warehouse'
+       AND w.id = (regexp_match(COALESCE(d.source, ''), '^warehouse:([0-9]+)'))[1]::bigint
       LEFT JOIN dispatch.dispatch_order_items i ON i.dispatch_order_id = d.id
       LEFT JOIN catalog.product_barcodes pb ON pb.id = i.product_barcode_id
       LEFT JOIN catalog.products p ON p.id = i.product_id
@@ -108,7 +175,7 @@ export const DispatchOrder = {
       LEFT JOIN catalog.categories c ON c.id = i.category_id
       LEFT JOIN catalog.units u ON u.id = i.unit_id
       WHERE d.id = $1
-      GROUP BY d.id
+      GROUP BY d.id, tp.transit_status, w.id, w.warehouse_code, w.warehouse_name
       `,
       [Number(id)]
     );
@@ -117,6 +184,8 @@ export const DispatchOrder = {
   },
 
   async createWithItems(data) {
+    await ensureDispatchPackingConfigsColumn();
+
     const client = await getClient();
 
     try {
@@ -180,10 +249,12 @@ export const DispatchOrder = {
             qty,
             notes,
             product_barcode_id,
+            inventory_product_id,
             exp_date,
-            no_of_units
+            no_of_units,
+            packing_configs
           )
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)
           `,
           [
             Number(order.id),
@@ -191,11 +262,13 @@ export const DispatchOrder = {
             item.brand_id ? Number(item.brand_id) : null,
             item.category_id ? Number(item.category_id) : null,
             item.unit_id ? Number(item.unit_id) : null,
-            Number(item.qty || item.no_of_units),
+            Number(item.qty ?? item.no_of_units),
             item.notes || null,
             item.product_barcode_id ? Number(item.product_barcode_id) : null,
+            item.inventory_product_id ? Number(item.inventory_product_id) : null,
             expDate,
-            Number(item.no_of_units || item.qty),
+            Number(item.no_of_units ?? item.qty),
+            JSON.stringify(getPackingConfigurations(item)),
           ]
         );
       }
@@ -252,6 +325,8 @@ export const DispatchOrder = {
   },
 
   async replaceItems(dispatchOrderId, items = []) {
+    await ensureDispatchPackingConfigsColumn();
+
     const client = await getClient();
 
     try {
@@ -285,10 +360,12 @@ export const DispatchOrder = {
             qty,
             notes,
             product_barcode_id,
+            inventory_product_id,
             exp_date,
-            no_of_units
+            no_of_units,
+            packing_configs
           )
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)
           `,
           [
             Number(dispatchOrderId),
@@ -296,11 +373,13 @@ export const DispatchOrder = {
             item.brand_id ? Number(item.brand_id) : null,
             item.category_id ? Number(item.category_id) : null,
             item.unit_id ? Number(item.unit_id) : null,
-            Number(item.qty || item.no_of_units),
+            Number(item.qty ?? item.no_of_units),
             item.notes || null,
             item.product_barcode_id ? Number(item.product_barcode_id) : null,
+            item.inventory_product_id ? Number(item.inventory_product_id) : null,
             expDate,
-            Number(item.no_of_units || item.qty),
+            Number(item.no_of_units ?? item.qty),
+            JSON.stringify(getPackingConfigurations(item)),
           ]
         );
       }

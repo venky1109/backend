@@ -10,6 +10,7 @@ import {
   deleteDispatchOrder,
   receivedDispatchToOutletMongoStock,
   receivedDispatchByStakeholder,
+  dispatchInternalPackingOrder,
 } from '../../controllers/inventory/dispatchController.js';
 
 import {
@@ -27,6 +28,7 @@ router.route('/orders').get(getDispatchOrders).post(createDispatchOrder);
 router.put('/orders/:id/received-to-outlet', receivedDispatchToOutletMongoStock);
 router.put('/orders/:id/received-by-stakeholder', receivedDispatchByStakeholder);
 router.put('/orders/:id/received-to-stakeholder', receivedDispatchByStakeholder);
+router.put('/orders/:id/internal-packing-dispatched', dispatchInternalPackingOrder);
 
 router.route('/orders/:id').get(getDispatchOrderById).put(updateDispatchOrder).delete(deleteDispatchOrder);
 

@@ -16,6 +16,82 @@ const getLineTotal = (item) => {
   return Number(item.no_of_units || 1) * getEffectivePrice(item);
 };
 
+const getItemQuantity = (item) => Number(item.qty ?? item.quantity ?? 0);
+
+const getCatalogBarcodeForPurchaseItem = async (client, item) => {
+  const barcodeId = item.product_barcode_id ?? item.productBarcodeId;
+  const params = [];
+  let where = '';
+
+  if (barcodeId) {
+    params.push(Number(barcodeId));
+    where = 'pb.id = $1';
+  } else {
+    params.push(
+      Number(item.product_id),
+      Number(item.brand_id),
+      Number(item.category_id),
+      Number(item.unit_id),
+      getItemQuantity(item)
+    );
+    where = `
+      pb.product_id = $1
+      AND pb.brand_id = $2
+      AND pb.category_id = $3
+      AND pb.unit_id = $4
+      AND pb.quantity::numeric = $5::numeric
+    `;
+  }
+
+  const { rows } = await client.query(
+    `
+    SELECT
+      pb.id,
+      pb.product_id,
+      pb.brand_id,
+      pb.category_id,
+      pb.unit_id,
+      pb.quantity
+    FROM catalog.product_barcodes pb
+    WHERE ${where}
+      AND COALESCE(pb.is_active, true) = true
+    LIMIT 1
+    `,
+    params
+  );
+
+  const barcode = rows[0];
+
+  if (!barcode) {
+    throw new Error(
+      'Selected product, brand, category, unit and quantity must match an active product barcode'
+    );
+  }
+
+  const checks = [
+    ['product_id', 'product_id'],
+    ['brand_id', 'brand_id'],
+    ['category_id', 'category_id'],
+    ['unit_id', 'unit_id'],
+  ];
+
+  for (const [inputKey, barcodeKey] of checks) {
+    if (
+      item[inputKey] !== undefined &&
+      item[inputKey] !== null &&
+      Number(item[inputKey]) !== Number(barcode[barcodeKey])
+    ) {
+      throw new Error(`${inputKey} does not match selected product_barcode_id`);
+    }
+  }
+
+  if (item.qty !== undefined && Number(item.qty) !== Number(barcode.quantity)) {
+    throw new Error('qty does not match selected product_barcode_id quantity');
+  }
+
+  return barcode;
+};
+
 const normalizeName = (value) => {
   return String(value || '')
     .trim()
@@ -88,6 +164,7 @@ export const getPurchaseOrdersDetailed = async (req, res, next) => {
           json_agg(
             json_build_object(
               'id', poi.id,
+              'product_barcode_id', poi.product_barcode_id,
               'product_id', poi.product_id,
               'product_name', p.product_name_eng,
               'product_code', p.product_code,
@@ -149,11 +226,7 @@ export const getPurchaseOrdersDetailed = async (req, res, next) => {
         ON u.id = poi.unit_id
 
       LEFT JOIN catalog.product_barcodes pb
-        ON pb.product_id = poi.product_id
-       AND pb.brand_id = poi.brand_id
-       AND pb.category_id = poi.category_id
-       AND pb.unit_id = poi.unit_id
-       AND pb.quantity::numeric = poi.qty::numeric
+        ON pb.id = poi.product_barcode_id
        AND pb.is_active = true
 
       GROUP BY
@@ -221,7 +294,22 @@ export const createPurchaseOrderWithItems = async (req, res, next) => {
 
     await client.query('BEGIN');
 
-    const totalAmount = items.reduce((sum, item) => {
+    const resolvedItems = [];
+
+    for (const item of items) {
+      const barcode = await getCatalogBarcodeForPurchaseItem(client, item);
+      resolvedItems.push({
+        ...item,
+        product_barcode_id: Number(barcode.id),
+        product_id: Number(barcode.product_id),
+        category_id: Number(barcode.category_id),
+        brand_id: Number(barcode.brand_id),
+        unit_id: Number(barcode.unit_id),
+        qty: Number(barcode.quantity),
+      });
+    }
+
+    const totalAmount = resolvedItems.reduce((sum, item) => {
       return sum + getLineTotal(item);
     }, 0);
 
@@ -229,7 +317,7 @@ export const createPurchaseOrderWithItems = async (req, res, next) => {
 
     const finalBillDetails = {
       ...bill_details,
-      items: items.map((item) => {
+      items: resolvedItems.map((item) => {
         const expectedPrice = Number(
           item.expected_unit_price ?? item.unit_price ?? 0
         );
@@ -243,6 +331,9 @@ export const createPurchaseOrderWithItems = async (req, res, next) => {
         const effectivePrice = actualPrice ?? expectedPrice;
 
         return {
+          product_barcode_id: item.product_barcode_id
+            ? Number(item.product_barcode_id)
+            : null,
           product_id: Number(item.product_id),
           category_id: Number(item.category_id),
           brand_id: Number(item.brand_id),
@@ -288,11 +379,12 @@ export const createPurchaseOrderWithItems = async (req, res, next) => {
     const purchaseOrder = poResult.rows[0];
     const insertedItems = [];
 
-    for (const item of items) {
+    for (const item of resolvedItems) {
       const itemResult = await client.query(
         `
         INSERT INTO purchases.purchase_order_items (
           purchase_order_id,
+          product_barcode_id,
           product_id,
           category_id,
           brand_id,
@@ -302,11 +394,12 @@ export const createPurchaseOrderWithItems = async (req, res, next) => {
           expected_unit_price,
           actual_unit_price
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         RETURNING *
         `,
         [
           purchaseOrder.id,
+          Number(item.product_barcode_id),
           Number(item.product_id),
           Number(item.category_id),
           Number(item.brand_id),
@@ -399,6 +492,7 @@ export const updatePurchaseOrderItems = async (req, res, next) => {
     const insertedItems = [];
 
     for (const item of items) {
+      const barcode = await getCatalogBarcodeForPurchaseItem(client, item);
       const expectedPrice = Number(
         item.expected_unit_price ?? item.unit_price ?? 0
       );
@@ -414,6 +508,7 @@ export const updatePurchaseOrderItems = async (req, res, next) => {
         `
         INSERT INTO purchases.purchase_order_items (
           purchase_order_id,
+          product_barcode_id,
           product_id,
           category_id,
           brand_id,
@@ -423,17 +518,18 @@ export const updatePurchaseOrderItems = async (req, res, next) => {
           expected_unit_price,
           actual_unit_price
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         RETURNING *
         `,
         [
           Number(id),
-          Number(item.product_id),
-          Number(item.category_id),
-          Number(item.brand_id),
-          Number(item.qty),
+          Number(barcode.id),
+          Number(barcode.product_id),
+          Number(barcode.category_id),
+          Number(barcode.brand_id),
+          Number(barcode.quantity),
           Number(item.no_of_units || 1),
-          Number(item.unit_id),
+          Number(barcode.unit_id),
           expectedPrice,
           actualPrice,
         ]
@@ -455,6 +551,9 @@ export const updatePurchaseOrderItems = async (req, res, next) => {
         const effectivePrice = actualPrice ?? expectedPrice;
 
         return {
+          product_barcode_id: item.product_barcode_id
+            ? Number(item.product_barcode_id)
+            : null,
           product_id: Number(item.product_id),
           category_id: Number(item.category_id),
           brand_id: Number(item.brand_id),
