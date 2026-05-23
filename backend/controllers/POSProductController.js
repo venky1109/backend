@@ -1,7 +1,6 @@
 
 import Product from '../models/productModel.js';
 import mongoose from 'mongoose';
-import { assignFinancialMkIds, findFinancialByMkid } from '../utils/financialMkid.js';
 
 export const createPOSProductFromCatalog = async (req, res) => {
   try {
@@ -167,7 +166,8 @@ const buildPOSProductSearchResponse = async ({ product, detail, financial }) => 
     brandId: detail._id,
     financialId: financial._id,
     catalogProductBarcodeId: financial.catalogProductBarcodeId,
-    mkid: financial.mkid,
+    mkid: financial.catalogProductBarcodeId,
+    productBarcodeId: financial.catalogProductBarcodeId,
     MRP: financial.price,
     dprice: financial.dprice,
     quantity: financial.quantity,
@@ -196,8 +196,6 @@ export const getPOSProductByBarcode = async (req, res) => {
 
     const { barcode } = req.params;
     // console.log('123 ' + barcode);
-
-    await assignFinancialMkIds(Product);
 
     // Assuming barcode is a string with multiple barcodes separated by commas
     const barcodesArray = barcode.split(',');
@@ -235,13 +233,38 @@ export const getPOSProductByBarcode = async (req, res) => {
   }
 };
 
-// @desc Get product by MKID typed by cashier
-export const getPOSProductByMkid = async (req, res) => {
+const findFinancialByCatalogProductBarcodeId = async (catalogProductBarcodeId) => {
+  const numericBarcodeId = Number(catalogProductBarcodeId);
+  if (!Number.isInteger(numericBarcodeId) || numericBarcodeId < 1) return null;
+
+  const product = await Product.findOne({
+    'details.financials.catalogProductBarcodeId': numericBarcodeId,
+  });
+
+  if (!product) return null;
+
+  for (const detail of product.details || []) {
+    const financial = detail.financials?.find(
+      (item) => Number(item.catalogProductBarcodeId) === numericBarcodeId
+    );
+
+    if (financial) {
+      return { product, detail, financial };
+    }
+  }
+
+  return null;
+};
+
+// @desc Get product by catalog product barcode ID typed by cashier
+export const getPOSProductByCatalogProductBarcodeId = async (req, res) => {
   try {
-    const found = await findFinancialByMkid(Product, req.params.mkid);
+    const catalogProductBarcodeId =
+      req.params.catalogProductBarcodeId || req.params.mkid;
+    const found = await findFinancialByCatalogProductBarcodeId(catalogProductBarcodeId);
 
     if (!found) {
-      return res.status(404).json({ error: "Product with MKID not found" });
+      return res.status(404).json({ error: "Product with catalogProductBarcodeId not found" });
     }
 
     const { product, detail, financial } = found;
@@ -250,7 +273,7 @@ export const getPOSProductByMkid = async (req, res) => {
     return res.status(200).json(response);
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: "Failed to fetch product by MKID" });
+    return res.status(500).json({ error: "Failed to fetch product by catalogProductBarcodeId" });
   }
 };
 
