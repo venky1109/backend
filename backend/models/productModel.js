@@ -16,6 +16,24 @@ const financialSchema = new mongoose.Schema({
   barcode: { type: [String], default: [] },
 });
 
+financialSchema.set('toJSON', {
+  transform: (_doc, ret) => {
+    if (ret.catalogProductBarcodeId !== undefined && ret.catalogProductBarcodeId !== null) {
+      ret.mkid = ret.catalogProductBarcodeId;
+    }
+    return ret;
+  },
+});
+
+financialSchema.set('toObject', {
+  transform: (_doc, ret) => {
+    if (ret.catalogProductBarcodeId !== undefined && ret.catalogProductBarcodeId !== null) {
+      ret.mkid = ret.catalogProductBarcodeId;
+    }
+    return ret;
+  },
+});
+
 // Define a schema for the image details
 const imageSchema = new mongoose.Schema({
   image: { type: String, required: true },
