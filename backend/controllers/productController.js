@@ -20,6 +20,21 @@ const findMatchingFinancialByBarcode = (product, barcode) => {
   return null;
 };
 
+const withCatalogBarcodeIdAsMkid = (product) => {
+  const payload = product?.toObject ? product.toObject() : product;
+
+  return {
+    ...payload,
+    details: (payload.details || []).map((detail) => ({
+      ...detail,
+      financials: (detail.financials || []).map((financial) => ({
+        ...financial,
+        mkid: financial.catalogProductBarcodeId ?? financial.mkid,
+      })),
+    })),
+  };
+};
+
 const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const firstDetailImage = (details = []) => {
@@ -64,7 +79,7 @@ const getProductImageUrl = async (product, match = null) => {
 };
 
 const productWithMatchMeta = async (product, match = null) => {
-  const payload = product.toObject ? product.toObject() : product;
+  const payload = withCatalogBarcodeIdAsMkid(product);
   const imageUrl = await getProductImageUrl(payload, match);
 
   if (!match) {
@@ -82,7 +97,7 @@ const productWithMatchMeta = async (product, match = null) => {
     matchedCatalogBrandId: match.detail?.catalogBrandId,
     matchedFinancialId: match.financial?._id,
     matchedCatalogProductBarcodeId: match.financial?.catalogProductBarcodeId,
-    matchedMkid: match.financial?.mkid,
+    matchedMkid: match.financial?.catalogProductBarcodeId ?? match.financial?.mkid,
     matchedBarcode: match.financial?.barcode || [],
     matchedQuantity: match.financial?.quantity,
     matchedUnits: match.financial?.units,
@@ -121,7 +136,11 @@ const getProducts = asyncHandler(async (req, res) => {
     .skip(pageSize * (page - 1));
 
     // console.log(products);
-  res.json({ products, page, pages: Math.ceil(count / pageSize) });
+  res.json({
+    products: products.map(withCatalogBarcodeIdAsMkid),
+    page,
+    pages: Math.ceil(count / pageSize),
+  });
 
 });
 
@@ -173,7 +192,11 @@ export const getProductsByCategory = asyncHandler(async (req, res) => {
     if (products.length === 0) {
       res.status(404).json({ message: `No products found in category: ${category}` });
     } else {
-      res.json({ products, page, pages: Math.ceil(count / pageSize) });
+      res.json({
+        products: products.map(withCatalogBarcodeIdAsMkid),
+        page,
+        pages: Math.ceil(count / pageSize),
+      });
     }
   } catch (error) {
     console.error('Error fetching products:', error); // Log error for debugging
@@ -459,7 +482,7 @@ const getBatchFinancialDetails = async (req, res) => {
             productId: item.productId,
             detailId: item.detailId,
             financialId: item.financialId,
-            mkid: financial.mkid,
+            mkid: financial.catalogProductBarcodeId ?? financial.mkid,
             price: financial.price,
             dprice: financial.dprice,
             discount:  financial.Discount, // Handle both possible naming conventions
@@ -700,7 +723,7 @@ const getTopProducts = asyncHandler(async (req, res) => {
 
   const products = await Product.find({}).sort({ rating: -1 }).limit(3);
 
-  res.json(products);
+  res.json(products.map(withCatalogBarcodeIdAsMkid));
 });
 
 // const updateStockById = asyncHandler(async (req, res) => {
