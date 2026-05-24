@@ -98,14 +98,15 @@ const buildDispatchReceivePayload = async (db, dispatchOrder) => {
       COALESCE(b.brand_name_english, b.brand_name_telugu, doi.brand_id::text) AS brand_name,
       COALESCE(c.category_name_english, c.category_name_telugu, doi.category_id::text) AS category_name,
       COALESCE(u.unit_short_code, u.unit_name, doi.unit_id::text) AS unit,
-      COALESCE(poi.actual_unit_price, poi.expected_unit_price, ip.unit_price, 0) AS unit_price
+      COALESCE(poi.actual_unit_price, poi.expected_unit_price, ip.unit_price, 0) AS unit_price,
+      COALESCE(ip.unit_mrp, 0) AS unit_mrp
     FROM dispatch.dispatch_order_items doi
     LEFT JOIN catalog.products p ON p.id = doi.product_id
     LEFT JOIN catalog.brands b ON b.id = doi.brand_id
     LEFT JOIN catalog.categories c ON c.id = doi.category_id
     LEFT JOIN catalog.units u ON u.id = doi.unit_id
     LEFT JOIN LATERAL (
-      SELECT ip.unit_price
+      SELECT ip.unit_price, ip.unit_mrp
       FROM inventory.inventory_products ip
       WHERE ip.product_barcode_id = doi.product_barcode_id
         AND ip.exp_date::date = doi.exp_date::date
@@ -127,6 +128,7 @@ const buildDispatchReceivePayload = async (db, dispatchOrder) => {
   payload.items = rows.map((item) => {
     const quantity = toNumber(item.quantity);
     const unitPrice = toNumber(item.unit_price);
+    const unitMrp = toNumber(item.unit_mrp);
 
     return {
       product_name: item.product_name || '',
@@ -135,6 +137,7 @@ const buildDispatchReceivePayload = async (db, dispatchOrder) => {
       quantity,
       unit: item.unit || '',
       unit_price: unitPrice,
+      unit_mrp: unitMrp,
       amount: quantity * unitPrice,
     };
   });
@@ -162,6 +165,7 @@ const buildInventoryMigrationPayload = async (db, data = {}, inventoryProduct = 
   const productBarcodeId = Number(data.product_barcode_id || inventoryProduct?.product_barcode_id);
   const quantity = toNumber(data.no_of_units ?? data.qty ?? inventoryProduct?.no_of_units, 0);
   const unitPrice = toNumber(data.unit_price ?? inventoryProduct?.unit_price, 0);
+  const unitMrp = toNumber(data.unit_mrp ?? data.unit_MRP ?? data.mrp ?? data.MRP ?? inventoryProduct?.unit_mrp, 0);
 
   const payload = {
     purchase_order_id: data.purchase_order_id ? Number(data.purchase_order_id) : null,
@@ -206,6 +210,7 @@ const buildInventoryMigrationPayload = async (db, data = {}, inventoryProduct = 
       quantity,
       unit: item.unit || '',
       unit_price: unitPrice,
+      unit_mrp: unitMrp,
       amount: quantity * unitPrice,
     },
   ];

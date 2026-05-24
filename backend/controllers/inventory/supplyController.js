@@ -812,6 +812,10 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
       qty,
       no_of_units = 1,
       unit_price,
+      unit_mrp,
+      unit_MRP,
+      mrp,
+      MRP,
       mfg_date,
       exp_date,
       remarks,
@@ -835,6 +839,7 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
     const units = Number(no_of_units || 1);
     const purchaseQty = Number(qty || 0);
     const price = Number(unit_price || 0);
+    const mrpPrice = Number(unit_mrp ?? unit_MRP ?? mrp ?? MRP ?? 0);
 
     await client.query('BEGIN');
 
@@ -919,18 +924,20 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
             no_of_units = COALESCE(no_of_units, 0) + $1,
             purchase_qty = COALESCE(purchase_qty, 0) + $2,
             unit_price = $3,
-            warehouse_id = $4,
-            exp_date = $5,
-            mfg_date = $6,
-            remarks = $7,
+            unit_mrp = $4,
+            warehouse_id = $5,
+            exp_date = $6,
+            mfg_date = $7,
+            remarks = $8,
             updated_at = NOW()
-        WHERE id = $8
+        WHERE id = $9
         RETURNING *
         `,
         [
           units,
           purchaseQty,
           price,
+          mrpPrice,
           Number(warehouse_id),
           exp_date,
           mfg_date || null,
@@ -947,7 +954,7 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
           product_barcode_id,
           product_code,
           product_name,
-          finalSkuId,
+          sku_id,
           hsn_code,
           bar_code,
           batch_id,
@@ -966,6 +973,7 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
           unit_id,
           purchase_qty,
           unit_price,
+          unit_mrp,
           verified_by,
           verified_by_name,
           remarks
@@ -973,7 +981,7 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
         VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
           $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-          $21,$22,$23,$24,$25
+          $21,$22,$23,$24,$25,$26
         )
         RETURNING *
         `,
@@ -981,7 +989,7 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
           Number(product.product_barcode_id),
           product.product_code,
           product.product_name,
-          sku_id,
+          finalSkuId,
           product.hsn_code,
           product.mk_barcode || product.barcode || null,
           Number(batch_id),
@@ -1004,6 +1012,7 @@ export const addVerifiedPurchaseToInventory = async (req, res, next) => {
           product.unit_id ? Number(product.unit_id) : null,
           purchaseQty,
           price,
+          mrpPrice,
           req.user?.username ||
             req.user?.name ||
             req.user?.first_name ||

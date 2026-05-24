@@ -136,6 +136,16 @@ export const deleteStockTransaction = asyncHandler(async (req, res) => {
 
 export const addVerifiedPurchaseToInventory = asyncHandler(async (req, res) => {
   let result;
+  const receivedUnitMrpInput =
+    req.body?.unit_mrp ??
+    req.body?.unit_MRP ??
+    req.body?.unitMrp ??
+    req.body?.unitMRP ??
+    req.body?.inventoryUnitMrp ??
+    req.body?.inventory_unit_mrp ??
+    req.body?.mrp ??
+    req.body?.MRP ??
+    null;
 
   try {
     result = await InventoryProduct.receiveVerifiedPurchase(
@@ -168,6 +178,8 @@ export const addVerifiedPurchaseToInventory = asyncHandler(async (req, res) => {
       : 'Purchase verified and added to inventory',
     already_received: Boolean(result.already_received),
     updated_existing: result.updated_existing,
+    received_unit_mrp_input: receivedUnitMrpInput,
+    saved_unit_mrp: result.inventoryProduct?.unit_mrp ?? result.unit_mrp ?? null,
     inventoryProduct: result.inventoryProduct,
     total_price: result.total_price,
     stockTransaction: result.stockTransaction,

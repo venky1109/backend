@@ -604,7 +604,9 @@ export const createDispatchOrder = asyncHandler(async (req, res) => {
 });
 
 export const updateDispatchStatus = asyncHandler(async (req, res) => {
-  const { dispatch_status } = req.body;
+  const dispatch_status = String(req.body.dispatch_status || req.body.status || '')
+    .trim()
+    .toLowerCase();
 
   const allowedStatuses = [
     'draft',
@@ -645,44 +647,46 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
       throw new Error('Dispatch order not found');
     }
 
+    const existingStatus = String(existing.dispatch_status || '').trim().toLowerCase();
+
     if (
       ['received_to_outlet', 'received_by_stakeholder', 'received_to_warehouse'].includes(
-        existing.dispatch_status
+        existingStatus
       )
     ) {
       res.status(400);
       throw new Error('Received dispatch cannot be changed');
     }
 
-    if (existing.dispatch_status === 'cancelled' && dispatch_status !== 'cancelled') {
+    if (existingStatus === 'cancelled' && dispatch_status !== 'cancelled') {
       res.status(400);
       throw new Error('Cancelled dispatch cannot be changed');
     }
 
-    if (dispatch_status === 'sent' && existing.dispatch_status !== 'draft') {
+    if (dispatch_status === 'sent' && existingStatus !== 'draft') {
       res.status(400);
       throw new Error('Only draft dispatch can be marked sent');
     }
 
-    if (dispatch_status === 'packed' && existing.dispatch_status !== 'sent') {
+    if (dispatch_status === 'packed' && existingStatus !== 'sent') {
       res.status(400);
-      throw new Error('Only sent dispatch can be marked packed');
+      throw new Error(`Only sent dispatch can be marked packed. Current status: ${existing.dispatch_status}`);
     }
 
-    if (dispatch_status === 'label_printed' && existing.dispatch_status !== 'packed') {
+    if (dispatch_status === 'label_printed' && existingStatus !== 'packed') {
       res.status(400);
       throw new Error('Only packed dispatch can be marked label printed');
     }
 
     if (
       dispatch_status === 'dispatched' &&
-      !['packed', 'label_printed'].includes(existing.dispatch_status)
+      !['packed', 'label_printed'].includes(existingStatus)
     ) {
       res.status(400);
       throw new Error('Only packed or label printed dispatch can be marked dispatched');
     }
 
-    if (dispatch_status === 'cancelled' && existing.dispatch_status === 'dispatched') {
+    if (dispatch_status === 'cancelled' && existingStatus === 'dispatched') {
       res.status(400);
       throw new Error('Dispatched orders cannot be cancelled');
     }
@@ -697,7 +701,7 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
         .split(':')[0]
         .toLowerCase();
 
-      if (existing.dispatch_status !== 'dispatched') {
+      if (existingStatus !== 'dispatched') {
         res.status(400);
         throw new Error('Only dispatched orders can be received by stakeholder');
       }
@@ -712,7 +716,7 @@ export const updateDispatchStatus = asyncHandler(async (req, res) => {
     }
 
     if (dispatch_status === 'received_to_warehouse') {
-      if (existing.dispatch_status !== 'dispatched') {
+      if (existingStatus !== 'dispatched') {
         res.status(400);
         throw new Error('Only dispatched orders can be received to warehouse');
       }
@@ -1184,6 +1188,8 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
               purchase_qty = COALESCE(purchase_qty, 0) + $1,
               business_entity_type = 'INTERNAL_PACKING',
               warehouse_id = $3,
+              unit_price = $4,
+              unit_mrp = $5,
               updated_at = NOW()
             WHERE id = $2
             RETURNING *
@@ -1192,6 +1198,8 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
               packedUnits,
               Number(existingPackedResult.rows[0].id),
               sourceWarehouseId ? Number(sourceWarehouseId) : null,
+              Number(sourceProduct.unit_price || 0),
+              Number(sourceProduct.unit_mrp || 0),
             ]
           );
 
@@ -1222,6 +1230,7 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
               unit_id,
               purchase_qty,
               unit_price,
+              unit_mrp,
               verified_by,
               verified_by_name,
               remarks
@@ -1229,7 +1238,7 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
             VALUES (
               $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
               $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-              $21,$22,$23,$24,$25
+              $21,$22,$23,$24,$25,$26
             )
             ON CONFLICT ON CONSTRAINT products_sku_id_key
             DO UPDATE SET
@@ -1237,6 +1246,8 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
               no_of_units = COALESCE(inventory.inventory_products.no_of_units, 0) + EXCLUDED.no_of_units,
               purchase_qty = COALESCE(inventory.inventory_products.purchase_qty, 0) + EXCLUDED.purchase_qty,
               warehouse_id = EXCLUDED.warehouse_id,
+              unit_price = EXCLUDED.unit_price,
+              unit_mrp = EXCLUDED.unit_mrp,
               updated_at = NOW()
             RETURNING *
             `,
@@ -1267,6 +1278,7 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
               packingBarcode.unit_id ? Number(packingBarcode.unit_id) : null,
               packedUnits,
               Number(sourceProduct.unit_price || 0),
+              Number(sourceProduct.unit_mrp || 0),
               req.user?.username || req.user?.name || req.user?.first_name || 'SYSTEM',
               req.user?.username || req.user?.name || req.user?.first_name || 'SYSTEM',
               `Created from internal packing dispatch ${dispatchOrder.dispatch_no || dispatchOrderId}`,
@@ -1442,6 +1454,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         u.unit_short_code,
         u.unit_name,
         ip.unit_price AS inventory_unit_price,
+        ip.unit_mrp AS inventory_unit_mrp,
         poi.expected_unit_price,
         poi.actual_unit_price
       FROM dispatch.dispatch_order_items doi
@@ -1451,7 +1464,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       LEFT JOIN catalog.categories c ON c.id = pb.category_id
       LEFT JOIN catalog.units u ON u.id = pb.unit_id
       LEFT JOIN LATERAL (
-        SELECT ip.unit_price
+        SELECT ip.unit_price, ip.unit_mrp
         FROM inventory.inventory_products ip
         WHERE ip.product_barcode_id = doi.product_barcode_id
           AND ip.exp_date::date = doi.exp_date::date
@@ -1501,8 +1514,11 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
           0
       );
       const mrpPrice = Number(
+        bodyItem?.unit_mrp ??
+          bodyItem?.unit_MRP ??
         bodyItem?.price ??
           bodyItem?.mrp_amount ??
+          item.inventory_unit_mrp ??
           (packagePrice > 0 ? Math.round(packagePrice * 1.25) : 0)
       );
       const discount = Number(item.discount ?? item.Discount ?? 0);

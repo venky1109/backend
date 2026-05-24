@@ -60,6 +60,21 @@ const normalizeName = (value) => {
     .toLowerCase();
 };
 
+const resolveUnitMrp = (data = {}) => {
+  const value =
+    data.unit_mrp ??
+    data.unit_MRP ??
+    data.unitMrp ??
+    data.unitMRP ??
+    data.inventoryUnitMrp ??
+    data.inventory_unit_mrp ??
+    data.mrp ??
+    data.MRP;
+
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+};
+
 const validateCatalogSelection = (data, product) => {
   if (data.product_id && Number(data.product_id) !== Number(product.product_id)) {
     throw new Error('product_id does not match selected product_barcode_id');
@@ -206,6 +221,14 @@ export const InventoryProduct = {
       qty,
       no_of_units = 1,
       unit_price = 0,
+      unit_mrp,
+      unit_MRP,
+      unitMrp,
+      unitMRP,
+      inventoryUnitMrp,
+      inventory_unit_mrp,
+      mrp,
+      MRP,
       remarks = null,
     } = data;
 
@@ -222,6 +245,16 @@ export const InventoryProduct = {
     const units = Number(no_of_units || 1);
     const purchaseQty = Number(qty || 0);
     const price = Number(unit_price || 0);
+    const mrpPrice = resolveUnitMrp({
+      unit_mrp,
+      unit_MRP,
+      unitMrp,
+      unitMRP,
+      inventoryUnitMrp,
+      inventory_unit_mrp,
+      mrp,
+      MRP,
+    });
 
     const client = await getClient();
 
@@ -301,9 +334,10 @@ export const InventoryProduct = {
               stakeholders_id = $14,
               unit_id = $15,
               unit_price = $16,
-              remarks = COALESCE($17, remarks),
+              unit_mrp = $17,
+              remarks = COALESCE($18, remarks),
               updated_at = now()
-            WHERE id = $18
+            WHERE id = $19
             RETURNING *
             `,
             [
@@ -327,6 +361,7 @@ export const InventoryProduct = {
                 : null,
               product.unit_id ? Number(product.unit_id) : null,
               price,
+              mrpPrice,
               remarks || null,
               receivedResult.rows[0].id,
             ]
@@ -378,17 +413,18 @@ export const InventoryProduct = {
             no_of_units = COALESCE(no_of_units, 0) + $2,
             purchase_qty = COALESCE(purchase_qty, 0) + $3,
             unit_price = $4,
-            batch_id = COALESCE($5, batch_id),
-            purchase_order_id = $6,
-            purchase_order_item_id = $7,
-            supplier_id = $8,
-            stakeholders_id = $9,
-            warehouse_id = $10,
-            exp_date = $11,
-            mfg_date = COALESCE($12, mfg_date),
-            remarks = COALESCE($13, remarks),
+            unit_mrp = $5,
+            batch_id = COALESCE($6, batch_id),
+            purchase_order_id = $7,
+            purchase_order_item_id = $8,
+            supplier_id = $9,
+            stakeholders_id = $10,
+            warehouse_id = $11,
+            exp_date = $12,
+            mfg_date = COALESCE($13, mfg_date),
+            remarks = COALESCE($14, remarks),
             updated_at = now()
-          WHERE id = $14
+          WHERE id = $15
           RETURNING *
           `,
           [
@@ -396,6 +432,7 @@ export const InventoryProduct = {
             units,
             purchaseQty,
             price,
+            mrpPrice,
             Number(batch_id),
             Number(purchase_order_id),
             purchase_order_item_id ? Number(purchase_order_item_id) : null,
@@ -440,6 +477,7 @@ export const InventoryProduct = {
             unit_id,
             purchase_qty,
             unit_price,
+            unit_mrp,
             verified_by,
             verified_by_name,
             remarks
@@ -447,7 +485,7 @@ export const InventoryProduct = {
           VALUES (
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
             $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-            $21,$22,$23,$24,$25
+            $21,$22,$23,$24,$25,$26
           )
           ON CONFLICT ON CONSTRAINT products_sku_id_key
           DO UPDATE SET
@@ -472,6 +510,7 @@ export const InventoryProduct = {
             supplier_id = EXCLUDED.supplier_id,
             unit_id = EXCLUDED.unit_id,
             unit_price = EXCLUDED.unit_price,
+            unit_mrp = EXCLUDED.unit_mrp,
             verified_by = EXCLUDED.verified_by,
             verified_by_name = EXCLUDED.verified_by_name,
             remarks = COALESCE(EXCLUDED.remarks, inventory.inventory_products.remarks),
@@ -505,6 +544,7 @@ export const InventoryProduct = {
             product.unit_id ? Number(product.unit_id) : null,
             purchaseQty,
             price,
+            mrpPrice,
             user?.username || user?.name || user?.first_name || 'SYSTEM',
             user?.username || user?.name || user?.first_name || 'SYSTEM',
             remarks || null,
@@ -554,6 +594,7 @@ export const InventoryProduct = {
         updated_existing: existingResult.rows.length > 0,
         inventoryProduct,
         total_price: inventoryProduct.total_price,
+        unit_mrp: inventoryProduct.unit_mrp,
         stockTransaction: transactionResult.rows[0],
       };
     } catch (error) {

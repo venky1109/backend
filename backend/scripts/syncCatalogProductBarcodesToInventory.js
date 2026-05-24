@@ -103,13 +103,14 @@ const insertInventoryPlaceholder = async (client, row) => {
       unit_id,
       purchase_qty,
       unit_price,
+      unit_mrp,
       verified_by,
       verified_by_name,
       remarks
     )
     VALUES (
       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-      $11,$12,$13,$14,$15,$16,$17
+      $11,$12,$13,$14,$15,$16,$17,$18
     )
     RETURNING id
     `,
@@ -126,6 +127,7 @@ const insertInventoryPlaceholder = async (client, row) => {
       0,
       'WAREHOUSE',
       numberOrNull(row.unit_id),
+      0,
       0,
       0,
       'CATALOG_MIGRATION',
