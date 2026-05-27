@@ -174,6 +174,23 @@ const normalizePackingConfigs = (item = {}) => {
         config.outputQty ??
         (configs.length === 1 ? 1 : 0)
     ),
+    package_amount:
+      config.package_amount ??
+      config.packageAmount ??
+      config.purchase_amount ??
+      config.purchaseAmount ??
+      null,
+    mrp_amount:
+      config.mrp_amount ??
+      config.mrpAmount ??
+      config.MRP ??
+      config.mrp ??
+      null,
+    margin_percentage: Number(config.margin_percentage ?? config.marginPercentage ?? 0),
+    labour_percentage: Number(config.labour_percentage ?? config.labourPercentage ?? 0),
+    transport_percentage: Number(config.transport_percentage ?? config.transportPercentage ?? 0),
+    load_percentage: Number(config.load_percentage ?? config.loadPercentage ?? 0),
+    unload_percentage: Number(config.unload_percentage ?? config.unloadPercentage ?? 0),
     notes: config.notes || null,
   }));
 };
@@ -214,6 +231,67 @@ const calculateDispatchUnitsFromPacking = (sourceBarcode, packingRows = []) => {
 
   const units = totalSourceQuantity / sourceQuantity;
   return Number.isFinite(units) && units > 0 ? units : null;
+};
+
+const getQuantityBaseUnits = (quantity, unitCode) => {
+  const qty = Number(quantity || 0);
+  const normalizedUnit = String(unitCode || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\./g, '');
+
+  if (!Number.isFinite(qty) || qty <= 0) return 0;
+  if (normalizedUnit.startsWith('kg')) return qty * 1000;
+  if (
+    normalizedUnit.startsWith('gm') ||
+    normalizedUnit.startsWith('gms') ||
+    normalizedUnit === 'g'
+  ) {
+    return qty;
+  }
+
+  return qty;
+};
+
+const calculatePackedUnitPrice = ({ explicitPrice, sourceProduct, packingBarcode, packingConfig }) => {
+  const explicit = Number(explicitPrice);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+
+  const sourcePrice = Number(sourceProduct?.unit_price || 0);
+  const sourceBaseQty = getQuantityBaseUnits(
+    sourceProduct?.barcode_quantity,
+    sourceProduct?.barcode_unit_short_code || sourceProduct?.barcode_unit_name
+  );
+  const packedBaseQty = getQuantityBaseUnits(
+    packingBarcode?.quantity,
+    packingBarcode?.unit_short_code || packingBarcode?.unit_name
+  );
+
+  if (!sourcePrice || !sourceBaseQty || !packedBaseQty) return sourcePrice || 0;
+
+  const baseAmount = (sourcePrice / sourceBaseQty) * packedBaseQty;
+  const percentTotal =
+    Number(packingConfig?.margin_percentage || 0) +
+    Number(packingConfig?.labour_percentage || 0) +
+    Number(packingConfig?.transport_percentage || 0) +
+    Number(packingConfig?.load_percentage || 0) +
+    Number(packingConfig?.unload_percentage || 0);
+
+  return Math.ceil(baseAmount + (baseAmount * percentTotal) / 100);
+};
+
+const getPackingPriceFromNotes = (notes, index) => {
+  const note = String(notes || '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)[index];
+
+  if (!note) return {};
+
+  return {
+    package_amount: note.match(/Purchase\s*Rs\.?\s*([0-9]+(?:\.[0-9]+)?)/i)?.[1],
+    mrp_amount: note.match(/MRP\s*Rs\.?\s*([0-9]+(?:\.[0-9]+)?)/i)?.[1],
+  };
 };
 
 const findPackingConfigOverride = (body = {}, item = {}, itemCount = 0) => {
@@ -312,10 +390,17 @@ const findInventoryStockForDispatch = async (
 ) => {
   const stockResult = await client.query(
     `
-    SELECT ip.*
+    SELECT
+      ip.*,
+      stock_pb.unit_id AS barcode_unit_id,
+      stock_pb.quantity AS barcode_quantity,
+      stock_u.unit_short_code AS barcode_unit_short_code,
+      stock_u.unit_name AS barcode_unit_name
     FROM inventory.inventory_products ip
     LEFT JOIN catalog.product_barcodes stock_pb
       ON stock_pb.id = ip.product_barcode_id
+    LEFT JOIN catalog.units stock_u
+      ON stock_u.id = stock_pb.unit_id
     WHERE ip.exp_date::date = $2::date
       AND COALESCE(ip.is_active, true) = true
       AND COALESCE(ip.business_entity_type, '') <> 'INTERNAL_PACKING'
@@ -361,10 +446,14 @@ const findInventoryStockById = async (client, inventoryProductId, forUpdate = fa
       pb.brand_id AS barcode_brand_id,
       pb.category_id AS barcode_category_id,
       pb.unit_id AS barcode_unit_id,
-      pb.quantity AS barcode_quantity
+      pb.quantity AS barcode_quantity,
+      u.unit_short_code AS barcode_unit_short_code,
+      u.unit_name AS barcode_unit_name
     FROM inventory.inventory_products ip
     LEFT JOIN catalog.product_barcodes pb
       ON pb.id = ip.product_barcode_id
+    LEFT JOIN catalog.units u
+      ON u.id = pb.unit_id
     WHERE ip.id = $1
       AND COALESCE(ip.is_active, true) = true
     LIMIT 1
@@ -514,6 +603,8 @@ const getCatalogBarcodeForPacking = async (client, productBarcodeId) => {
       pb.category_id,
       pb.unit_id,
       pb.quantity,
+      u.unit_short_code,
+      u.unit_name,
       COALESCE(pb.barcode, pb.mk_barcode) AS barcode,
       pb.mk_barcode,
       p.product_code,
@@ -522,6 +613,7 @@ const getCatalogBarcodeForPacking = async (client, productBarcodeId) => {
       p.hsncode
     FROM catalog.product_barcodes pb
     LEFT JOIN catalog.products p ON p.id = pb.product_id
+    LEFT JOIN catalog.units u ON u.id = pb.unit_id
     WHERE pb.id = $1
       AND COALESCE(pb.is_active, true) = true
     `,
@@ -1137,6 +1229,7 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
 
       for (let packingIndex = 0; packingIndex < packingConfigs.length; packingIndex += 1) {
         const packingConfig = packingConfigs[packingIndex];
+        const notePrice = getPackingPriceFromNotes(item.notes, packingIndex);
         const packedUnits = Number(packingConfig.qty);
         const packingBarcode = await getCatalogBarcodeForPacking(
           client,
@@ -1148,6 +1241,24 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
             `Invalid packing product barcode ID ${packingConfig.product_barcode_id} for dispatch item ${item.id}`
           );
         }
+
+        const packedUnitPrice = calculatePackedUnitPrice({
+          explicitPrice:
+            packingConfig.package_amount ??
+            packingConfig.purchase_amount ??
+            notePrice.package_amount,
+          sourceProduct,
+          packingBarcode,
+          packingConfig,
+        });
+        const packedUnitMrp = Number(
+          packingConfig.mrp_amount ??
+            packingConfig.MRP ??
+            packingConfig.mrp ??
+            notePrice.mrp_amount ??
+            (packedUnitPrice > 0 ? Math.round(packedUnitPrice * 1.25) : sourceProduct.unit_mrp) ??
+            0
+        );
 
         const targetSkuId = makeInternalPackingSkuId({
           dispatchOrderId,
@@ -1163,9 +1274,23 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
           FROM inventory.inventory_products
           WHERE product_barcode_id = $1
             AND warehouse_id IS NOT DISTINCT FROM $2::bigint
-            AND supplier_id IS NOT DISTINCT FROM $3
-            AND business_entity_type = 'INTERNAL_PACKING'
-          ORDER BY id ASC
+            AND supplier_id IS NOT DISTINCT FROM $3::bigint
+            AND (
+              business_entity_type = 'INTERNAL_PACKING'
+              OR (
+                purchase_order_id IS NOT DISTINCT FROM $4::bigint
+                AND purchase_order_item_id IS NOT DISTINCT FROM $5::bigint
+              )
+            )
+          ORDER BY
+            CASE
+              WHEN purchase_order_id IS NOT DISTINCT FROM $4::bigint
+                AND purchase_order_item_id IS NOT DISTINCT FROM $5::bigint
+                THEN 0
+              WHEN business_entity_type = 'INTERNAL_PACKING' THEN 1
+              ELSE 2
+            END,
+            id ASC
           LIMIT 1
           FOR UPDATE
           `,
@@ -1173,6 +1298,10 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
             Number(packingConfig.product_barcode_id),
             sourceWarehouseId ? Number(sourceWarehouseId) : null,
             sourceProduct.supplier_id ? Number(sourceProduct.supplier_id) : null,
+            sourceProduct.purchase_order_id ? Number(sourceProduct.purchase_order_id) : null,
+            sourceProduct.purchase_order_item_id
+              ? Number(sourceProduct.purchase_order_item_id)
+              : null,
           ]
         );
 
@@ -1190,6 +1319,8 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
               warehouse_id = $3,
               unit_price = $4,
               unit_mrp = $5,
+              purchase_order_id = $6,
+              purchase_order_item_id = $7,
               updated_at = NOW()
             WHERE id = $2
             RETURNING *
@@ -1198,8 +1329,12 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
               packedUnits,
               Number(existingPackedResult.rows[0].id),
               sourceWarehouseId ? Number(sourceWarehouseId) : null,
-              Number(sourceProduct.unit_price || 0),
-              Number(sourceProduct.unit_mrp || 0),
+              packedUnitPrice,
+              packedUnitMrp,
+              sourceProduct.purchase_order_id ? Number(sourceProduct.purchase_order_id) : null,
+              sourceProduct.purchase_order_item_id
+                ? Number(sourceProduct.purchase_order_item_id)
+                : null,
             ]
           );
 
@@ -1277,8 +1412,8 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
               sourceProduct.supplier_id ? Number(sourceProduct.supplier_id) : null,
               packingBarcode.unit_id ? Number(packingBarcode.unit_id) : null,
               packedUnits,
-              Number(sourceProduct.unit_price || 0),
-              Number(sourceProduct.unit_mrp || 0),
+              packedUnitPrice,
+              packedUnitMrp,
               req.user?.username || req.user?.name || req.user?.first_name || 'SYSTEM',
               req.user?.username || req.user?.name || req.user?.first_name || 'SYSTEM',
               `Created from internal packing dispatch ${dispatchOrder.dispatch_no || dispatchOrderId}`,
@@ -1463,14 +1598,8 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       LEFT JOIN catalog.brands b ON b.id = pb.brand_id
       LEFT JOIN catalog.categories c ON c.id = pb.category_id
       LEFT JOIN catalog.units u ON u.id = pb.unit_id
-      LEFT JOIN LATERAL (
-        SELECT ip.unit_price, ip.unit_mrp
-        FROM inventory.inventory_products ip
-        WHERE ip.product_barcode_id = doi.product_barcode_id
-          AND ip.exp_date::date = doi.exp_date::date
-        ORDER BY ip.updated_at DESC, ip.id DESC
-        LIMIT 1
-      ) ip ON true
+      LEFT JOIN inventory.inventory_products ip
+        ON ip.id = doi.inventory_product_id
       LEFT JOIN purchases.purchase_order_items poi
         ON poi.purchase_order_id = $2
        AND poi.product_id = doi.product_id
@@ -1506,19 +1635,19 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         Number(receivedItem.product_barcode_id) === Number(item.catalog_product_barcode_id)
       );
       const packagePrice = Number(
-        bodyItem?.dprice ??
+        item.inventory_unit_price ??
+          bodyItem?.dprice ??
           bodyItem?.package_amount ??
-          item.inventory_unit_price ??
           item.actual_unit_price ??
           item.expected_unit_price ??
           0
       );
       const mrpPrice = Number(
-        bodyItem?.unit_mrp ??
+        item.inventory_unit_mrp ??
+          bodyItem?.unit_mrp ??
           bodyItem?.unit_MRP ??
-        bodyItem?.price ??
+          bodyItem?.price ??
           bodyItem?.mrp_amount ??
-          item.inventory_unit_mrp ??
           (packagePrice > 0 ? Math.round(packagePrice * 1.25) : 0)
       );
       const discount = Number(item.discount ?? item.Discount ?? 0);

@@ -75,6 +75,10 @@ export const DispatchOrder = {
               'unit_id', i.unit_id,
               'qty', i.qty,
               'no_of_units', i.no_of_units,
+              'unit_price', ip.unit_price,
+              'unit_mrp', ip.unit_mrp,
+              'inventory_unit_price', ip.unit_price,
+              'inventory_unit_mrp', ip.unit_mrp,
               'packing_configs', COALESCE(i.packing_configs, '[]'::jsonb),
               'packing_configurations', COALESCE(i.packing_configs, '[]'::jsonb),
               'exp_date', to_char(i.exp_date::date, 'YYYY-MM-DD'),
@@ -101,6 +105,7 @@ export const DispatchOrder = {
         ON split_part(COALESCE(d.source, ''), ':', 1) = 'warehouse'
        AND w.id = (regexp_match(COALESCE(d.source, ''), '^warehouse:([0-9]+)'))[1]::bigint
       LEFT JOIN dispatch.dispatch_order_items i ON i.dispatch_order_id = d.id
+      LEFT JOIN inventory.inventory_products ip ON ip.id = i.inventory_product_id
       LEFT JOIN catalog.product_barcodes pb ON pb.id = i.product_barcode_id
       LEFT JOIN catalog.products p ON p.id = i.product_id
       LEFT JOIN catalog.brands b ON b.id = i.brand_id
@@ -143,6 +148,10 @@ export const DispatchOrder = {
               'unit_id', i.unit_id,
               'qty', i.qty,
               'no_of_units', i.no_of_units,
+              'unit_price', ip.unit_price,
+              'unit_mrp', ip.unit_mrp,
+              'inventory_unit_price', ip.unit_price,
+              'inventory_unit_mrp', ip.unit_mrp,
               'packing_configs', COALESCE(i.packing_configs, '[]'::jsonb),
               'packing_configurations', COALESCE(i.packing_configs, '[]'::jsonb),
               'exp_date', to_char(i.exp_date::date, 'YYYY-MM-DD'),
@@ -169,6 +178,7 @@ export const DispatchOrder = {
         ON split_part(COALESCE(d.source, ''), ':', 1) = 'warehouse'
        AND w.id = (regexp_match(COALESCE(d.source, ''), '^warehouse:([0-9]+)'))[1]::bigint
       LEFT JOIN dispatch.dispatch_order_items i ON i.dispatch_order_id = d.id
+      LEFT JOIN inventory.inventory_products ip ON ip.id = i.inventory_product_id
       LEFT JOIN catalog.product_barcodes pb ON pb.id = i.product_barcode_id
       LEFT JOIN catalog.products p ON p.id = i.product_id
       LEFT JOIN catalog.brands b ON b.id = i.brand_id
