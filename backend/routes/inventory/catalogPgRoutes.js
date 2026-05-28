@@ -9,6 +9,7 @@ import {
   Employee,
   Outlet,
   Warehouse,
+  RatePlan,
   Bill,
 } from '../../models/inventory/catalogModels.js';
 
@@ -82,6 +83,7 @@ mountCrud('/stakeholders', Stakeholder);
 mountCrud('/employees', Employee);
 mountCrud('/outlets', Outlet);
 mountCrud('/warehouses', Warehouse);
+mountCrud('/rate-plans', RatePlan);
 mountCrud('/bills', Bill);
 
 export default router;

@@ -137,6 +137,11 @@ const normalizePackingConfigs = (item = {}) => {
   const configs = getPackingConfigs(item);
 
   return configs.map((config) => ({
+    rate_plan_id: config.rate_plan_id
+      ? Number(config.rate_plan_id)
+      : config.ratePlanId
+        ? Number(config.ratePlanId)
+        : null,
     product_barcode_id: config.product_barcode_id
       ? Number(config.product_barcode_id)
       : config.productBarcodeId
@@ -174,18 +179,10 @@ const normalizePackingConfigs = (item = {}) => {
         config.outputQty ??
         (configs.length === 1 ? 1 : 0)
     ),
-    package_amount:
-      config.package_amount ??
-      config.packageAmount ??
-      config.purchase_amount ??
-      config.purchaseAmount ??
-      null,
-    mrp_amount:
-      config.mrp_amount ??
-      config.mrpAmount ??
-      config.MRP ??
-      config.mrp ??
-      null,
+    package_amount: config.package_amount ?? config.packageAmount ?? null,
+    mrp_amount: config.mrp_amount ?? config.mrpAmount ?? config.MRP ?? config.mrp ?? null,
+    rate_for: config.rate_for ?? config.rateFor ?? null,
+    gst_rate: Number(config.gst_rate ?? config.gstRate ?? 0),
     margin_percentage: Number(config.margin_percentage ?? config.marginPercentage ?? 0),
     labour_percentage: Number(config.labour_percentage ?? config.labourPercentage ?? 0),
     transport_percentage: Number(config.transport_percentage ?? config.transportPercentage ?? 0),
@@ -203,6 +200,10 @@ const validatePackingConfigs = (configs = [], itemId = 'item') => {
 
     if (!Number.isFinite(config.qty) || config.qty <= 0) {
       throw new Error(`Packing quantity must be greater than 0 for dispatch ${itemId}`);
+    }
+
+    if (!config.rate_plan_id) {
+      throw new Error(`Rate plan is required for dispatch ${itemId}`);
     }
   }
 };
@@ -251,6 +252,101 @@ const getQuantityBaseUnits = (quantity, unitCode) => {
   }
 
   return qty;
+};
+
+const ensureCatalogRatePlansTable = async (client) => {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS catalog.rate_plans (
+      id BIGSERIAL PRIMARY KEY,
+      product_barcode_id BIGINT NOT NULL
+        REFERENCES catalog.product_barcodes(id) ON DELETE CASCADE,
+      rate_for TEXT NOT NULL DEFAULT 'customer',
+      gst_rate NUMERIC(8, 2) NOT NULL DEFAULT 0,
+      margin_percentage NUMERIC(8, 2) NOT NULL DEFAULT 0,
+      labour_percentage NUMERIC(8, 2) NOT NULL DEFAULT 0,
+      transport_percentage NUMERIC(8, 2) NOT NULL DEFAULT 0,
+      load_percentage NUMERIC(8, 2) NOT NULL DEFAULT 0,
+      unload_percentage NUMERIC(8, 2) NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await client.query(`
+    ALTER TABLE catalog.rate_plans
+    ADD COLUMN IF NOT EXISTS gst_rate NUMERIC(8, 2) NOT NULL DEFAULT 0
+  `);
+
+  await client.query(`
+    ALTER TABLE catalog.rate_plans
+    ADD COLUMN IF NOT EXISTS rate_for TEXT NOT NULL DEFAULT 'customer'
+  `);
+
+  await client.query(`
+    ALTER TABLE catalog.rate_plans
+    DROP COLUMN IF EXISTS package_amount
+  `);
+
+  await client.query(`
+    ALTER TABLE catalog.rate_plans
+    DROP COLUMN IF EXISTS mrp_amount
+  `);
+
+  await client.query(`
+    ALTER TABLE catalog.rate_plans
+    DROP CONSTRAINT IF EXISTS rate_plans_product_barcode_id_key
+  `);
+
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_rate_plans_barcode_rate_for
+    ON catalog.rate_plans(product_barcode_id, lower(rate_for))
+  `);
+};
+
+const fetchRatePlansByIds = async (client, ratePlanIds = []) => {
+  const ids = [...new Set(ratePlanIds.map(Number).filter(Number.isFinite))];
+  if (!ids.length) return new Map();
+
+  await ensureCatalogRatePlansTable(client);
+
+  const { rows } = await client.query(
+    `
+    SELECT *
+    FROM catalog.rate_plans
+    WHERE id = ANY($1::bigint[])
+    `,
+    [ids]
+  );
+
+  return new Map(rows.map((row) => [Number(row.id), row]));
+};
+
+const applyRatePlanDefaults = (config = {}, ratePlansById = new Map()) => {
+  const ratePlan = ratePlansById.get(Number(config.rate_plan_id));
+  if (!ratePlan) return config;
+
+  return {
+    ...config,
+    rate_plan_id: Number(ratePlan.id),
+    rate_for: ratePlan.rate_for ?? config.rate_for,
+    gst_rate: ratePlan.gst_rate ?? config.gst_rate,
+    margin_percentage: ratePlan.margin_percentage ?? config.margin_percentage,
+    labour_percentage: ratePlan.labour_percentage ?? config.labour_percentage,
+    transport_percentage: ratePlan.transport_percentage ?? config.transport_percentage,
+    load_percentage: ratePlan.load_percentage ?? config.load_percentage,
+    unload_percentage: ratePlan.unload_percentage ?? config.unload_percentage,
+    notes: config.notes ?? ratePlan.notes ?? null,
+  };
+};
+
+const applyRatePlansToPackingConfigs = async (client, configs = []) => {
+  const ratePlans = await fetchRatePlansByIds(
+    client,
+    configs.map((config) => config.rate_plan_id)
+  );
+
+  return configs.map((config) => applyRatePlanDefaults(config, ratePlans));
 };
 
 const calculatePackedUnitPrice = ({ explicitPrice, sourceProduct, packingBarcode, packingConfig }) => {
@@ -1221,9 +1317,10 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
         throw new Error(`Packing configuration missing for dispatch item ${item.id}`);
       }
 
-      const packingConfigs = normalizePackingConfigs({
+      let packingConfigs = normalizePackingConfigs({
         packing_configurations: packingConfigurations,
       });
+      packingConfigs = await applyRatePlansToPackingConfigs(client, packingConfigs);
 
       validatePackingConfigs(packingConfigs, `item ${item.id}`);
 

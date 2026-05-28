@@ -116,7 +116,11 @@ const productWithMatchMeta = async (product, match = null) => {
 // @route   GET /api/products
 // @access  Public
 const getProducts = asyncHandler(async (req, res) => {
-  const pageSize = process.env.PAGINATION_LIMIT;
+  const requestedPageSize = Number(req.query.pageSize);
+  const defaultPageSize = Number(process.env.PAGINATION_LIMIT) || 10;
+  const pageSize = Number.isFinite(requestedPageSize) && requestedPageSize > 0
+    ? Math.min(requestedPageSize, 500)
+    : defaultPageSize;
   const page = Number(req.query.pageNumber) || 1;
 
   const keyword = req.query.keyword
@@ -181,7 +185,11 @@ export const getProductsByCategory = asyncHandler(async (req, res) => {
     const category = req.params.category;
     // console.log("products req:", req.params); // Log parameters to see what's received
 
-    const pageSize = Number(process.env.PAGINATION_LIMIT) || 10; // Default page size if not set
+    const requestedPageSize = Number(req.query.pageSize);
+    const defaultPageSize = Number(process.env.PAGINATION_LIMIT) || 10;
+    const pageSize = Number.isFinite(requestedPageSize) && requestedPageSize > 0
+      ? Math.min(requestedPageSize, 200)
+      : defaultPageSize; // Default page size if not set
     const page = Number(req.query.pageNumber) || 1; // Default to page 1 if not specified
 
     // Find products by category

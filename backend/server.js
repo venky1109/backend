@@ -22,6 +22,7 @@ import catalogBarcodeRoutes from './routes/inventory/catalogBarcodeRoutes.js';
 import inventoryDashboardRoutes from './routes/inventory/inventoryDashboardRoutes.js';
 import requestTrackingRoutes from './routes/inventory/requestTrackingRoutes.js';
 import migrationRoutes from './routes/inventory/migrationRoutes.js';
+import advertisementRoutes from './routes/marketing/advertisementRoutes.js';
 // import dispatchRoutes from "./routes/dispatch/dispatchRoutes.js";
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 import { Server } from 'socket.io';
@@ -52,7 +53,13 @@ const io = new Server(server, {
        'https://smartgateway.hdfc.bank.in',
       'https://manakirana-988b3.firebaseapp.com/',
       'https://pos-manakirana.firebaseapp.com',
-      'https://pos-manakirana.web.app'
+      'https://pos-manakirana.web.app',
+      'https://hadavidi-manakirana.web.app',
+      'https://hadavidi-manakirana.firebaseapp.com',
+      ...(process.env.ADDITIONAL_CORS_ORIGINS || '')
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean)
     ],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
@@ -85,7 +92,13 @@ const allowedOrigins = [
   'https://smartgateway.hdfc.bank.in',
   'https://manakirana-988b3.firebaseapp.com',
   'https://pos-manakirana.web.app',
-     'https://pos-manakirana.firebaseapp.com'
+  'https://pos-manakirana.firebaseapp.com',
+  'https://hadavidi-manakirana.web.app',
+  'https://hadavidi-manakirana.firebaseapp.com',
+  ...(process.env.ADDITIONAL_CORS_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
 ];
 
 
@@ -150,6 +163,7 @@ app.use('/api/catalog-pg/product-barcodes', catalogBarcodeRoutes);
 app.use('/api/inventory-dashboard', inventoryDashboardRoutes);
 app.use('/api/request-tracking', requestTrackingRoutes);
 app.use('/api/migration', migrationRoutes);
+app.use('/api/advertisements', advertisementRoutes);
 // app.use("/api/dispatch", dispatchRoutes);
 
 
