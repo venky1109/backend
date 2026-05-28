@@ -334,7 +334,7 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
       quantity: item.quantity,
       units: item.units,
       qty: item.qty,
-      image: item.image,
+      image: item.image || detail.images?.[0]?.image || '',
       price: finance.dprice,
       productId: product._id,
       brandId: detail._id,
