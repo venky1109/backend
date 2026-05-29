@@ -21,7 +21,11 @@ const toBarcodeArray = (barcode) => {
 };
 
 const hasBarcode = (financial, code) =>
-  toBarcodeArray(financial?.barcode)
+  [
+    ...toBarcodeArray(financial?.barcode),
+    financial?.MK_BARCODE,
+    financial?.mkBarcode,
+  ]
     .filter(Boolean)
     .some((item) => String(item) === String(code));
 
@@ -450,6 +454,8 @@ const syncBarcodeMongoIds = async (client, item, product, detail, financial) => 
   }
 
   const imageUrl =
+    item.image_url ||
+    item.imageUrl ||
     detail.images?.[0]?.image ||
     product.details?.find((productDetail) => productDetail.images?.[0]?.image)?.images?.[0]?.image ||
     null;
@@ -567,8 +573,15 @@ const validateDispatchItems = (items = []) => {
   }
 
   for (const item of items) {
-    if (!item.product_barcode_id && !item.inventory_product_id) {
-      throw new Error('Product barcode is required for every item');
+    if (
+      !item.product_barcode_id &&
+      !item.inventory_product_id &&
+      !item.MK_BARCODE &&
+      !item.mk_barcode &&
+      !item.mkBarcode &&
+      !item.barcode
+    ) {
+      throw new Error('MK_BARCODE is required for every item');
     }
 
     if (!toPgDate(item.exp_date)) {
@@ -600,6 +613,7 @@ const hydrateDispatchItemsFromBarcodes = async (client, items = []) => {
       throw new Error(`Inventory stock not found for inventory ID ${item.inventory_product_id}`);
     }
 
+    const itemMkBarcode = item.MK_BARCODE || item.mk_barcode || item.mkBarcode || item.barcode;
     const barcodeResult = await client.query(
       `
       SELECT
@@ -610,14 +624,22 @@ const hydrateDispatchItemsFromBarcodes = async (client, items = []) => {
         pb.unit_id,
         pb.quantity
       FROM catalog.product_barcodes pb
-      WHERE pb.id = $1
+      WHERE (
+          ($1::bigint IS NOT NULL AND pb.id = $1::bigint)
+          OR ($2::text IS NOT NULL AND (pb.mk_barcode = $2::text OR pb.barcode = $2::text))
+        )
         AND COALESCE(pb.is_active, true) = true
       `,
-      [Number(item.product_barcode_id || selectedInventory?.product_barcode_id)]
+      [
+        item.product_barcode_id || selectedInventory?.product_barcode_id
+          ? Number(item.product_barcode_id || selectedInventory?.product_barcode_id)
+          : null,
+        itemMkBarcode ? String(itemMkBarcode) : null,
+      ]
     );
 
     if (barcodeResult.rowCount === 0) {
-      throw new Error(`Invalid product barcode ID ${item.product_barcode_id}`);
+      throw new Error(`Invalid MK_BARCODE ${itemMkBarcode || item.product_barcode_id}`);
     }
 
     const barcodeInfo = barcodeResult.rows[0];
@@ -1676,6 +1698,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         pb.unit_id,
         pb.mk_barcode,
         COALESCE(pb.barcode, pb.mk_barcode) AS barcode,
+        pb.image_url,
         pb.quantity AS barcode_quantity,
         p.product_name_eng,
         p.product_name_tel,
@@ -1729,8 +1752,11 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       const qtyToAdd = Number(item.no_of_units ?? item.qty ?? 0);
       const bodyItem = bodyItems.find((receivedItem) =>
         Number(receivedItem.dispatch_order_item_id) === Number(item.id) ||
-        Number(receivedItem.product_barcode_id) === Number(item.catalog_product_barcode_id)
+        Number(receivedItem.product_barcode_id) === Number(item.catalog_product_barcode_id) ||
+        String(receivedItem.MK_BARCODE || receivedItem.mk_barcode || receivedItem.barcode || '') ===
+          String(item.mk_barcode || item.barcode || '')
       );
+      const imageUrl = bodyItem?.image_url || bodyItem?.imageUrl || item.image_url || null;
       const packagePrice = Number(
         item.inventory_unit_price ??
           bodyItem?.dprice ??
@@ -1761,6 +1787,8 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         (await Product.findOne({
           'details.financials.catalogProductBarcodeId': Number(item.catalog_product_barcode_id),
         })) ||
+        (await Product.findOne({ 'details.financials.MK_BARCODE': { $in: barcodes } })) ||
+        (await Product.findOne({ 'details.financials.mkBarcode': { $in: barcodes } })) ||
         (await Product.findOne({ 'details.financials.barcode': { $in: barcodes } }));
 
       if (!product) {
@@ -1804,10 +1832,12 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
           catalogBrandId: Number(item.brand_id),
           brand: item.brand_name_english || 'Migration',
           description: 'Created from outlet migration receive',
-          images: [],
+          images: imageUrl ? [{ image: imageUrl }] : [],
           financials: [],
         });
         detail = product.details[product.details.length - 1];
+      } else if (imageUrl && !(detail.images || []).some((image) => image.image === imageUrl)) {
+        detail.images = [...(detail.images || []), { image: imageUrl }];
       }
 
       let financial = (detail.financials || []).find(
@@ -1825,11 +1855,15 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         financial.price = unitPrice;
         financial.dprice = sellingPrice;
         financial.Discount = discount;
+        financial.MK_BARCODE = item.mk_barcode || financial.MK_BARCODE || item.barcode;
+        financial.mkBarcode = item.mk_barcode || financial.mkBarcode || item.barcode;
       } else {
         detail.financials.push({
           _id: new mongoose.Types.ObjectId(),
           catalogProductBarcodeId: Number(item.catalog_product_barcode_id),
           mkid: Number(item.catalog_product_barcode_id),
+          MK_BARCODE: item.mk_barcode || item.barcode,
+          mkBarcode: item.mk_barcode || item.barcode,
           price: unitPrice,
           dprice: sellingPrice,
           Discount: discount,
@@ -1842,7 +1876,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       }
 
       await product.save();
-      await syncBarcodeMongoIds(client, item, product, detail, financial);
+      await syncBarcodeMongoIds(client, { ...item, image_url: imageUrl }, product, detail, financial);
 
       updatedProducts.push({
         productId: product._id,

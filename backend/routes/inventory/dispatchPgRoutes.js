@@ -12,6 +12,7 @@ import {
   receivedDispatchByStakeholder,
   dispatchInternalPackingOrder,
 } from '../../controllers/inventory/dispatchController.js';
+import { rollbackDispatch } from '../../controllers/inventory/rollbackController.js';
 
 import {
   protectPOS,
@@ -29,6 +30,7 @@ router.put('/orders/:id/received-to-outlet', receivedDispatchToOutletMongoStock)
 router.put('/orders/:id/received-by-stakeholder', receivedDispatchByStakeholder);
 router.put('/orders/:id/received-to-stakeholder', receivedDispatchByStakeholder);
 router.put('/orders/:id/internal-packing-dispatched', dispatchInternalPackingOrder);
+router.put('/orders/:id/rollback', rollbackDispatch);
 
 router.route('/orders/:id').get(getDispatchOrderById).put(updateDispatchOrder).delete(deleteDispatchOrder);
 

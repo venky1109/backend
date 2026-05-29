@@ -56,6 +56,10 @@ const io = new Server(server, {
       'https://pos-manakirana.web.app',
       'https://hadavidi-manakirana.web.app',
       'https://hadavidi-manakirana.firebaseapp.com',
+      'https://app-aahaabkyy-4.canva-apps.com',
+      'https://app-aahaajl06x0.canva-apps.com',
+      'https://www.canva.com',
+      'https://canva.com',
       ...(process.env.ADDITIONAL_CORS_ORIGINS || '')
         .split(',')
         .map((origin) => origin.trim())
@@ -95,6 +99,10 @@ const allowedOrigins = [
   'https://pos-manakirana.firebaseapp.com',
   'https://hadavidi-manakirana.web.app',
   'https://hadavidi-manakirana.firebaseapp.com',
+  'https://app-aahaabkyy-4.canva-apps.com',
+  'https://app-aahaajl06x0.canva-apps.com',
+  'https://www.canva.com',
+  'https://canva.com',
   ...(process.env.ADDITIONAL_CORS_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())

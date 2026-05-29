@@ -17,6 +17,7 @@ import {
 import {
   receivePurchaseOrder,
 } from '../../controllers/inventory/supplyController.js';
+import { rollbackPurchaseInventory } from '../../controllers/inventory/rollbackController.js';
 
 import {
   protectPOS,
@@ -57,5 +58,6 @@ router.post('/receive-purchase-order', receivePurchaseOrder);
 
 // ✅ Verified PO → inventory product with batch_id, sku_id, exp_date
 router.post('/receive-verified-purchase', addVerifiedPurchaseToInventory);
+router.put('/rollback-purchase/:id', rollbackPurchaseInventory);
 
 export default router;

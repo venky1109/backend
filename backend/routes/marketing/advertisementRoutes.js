@@ -10,7 +10,9 @@ import {
   deleteAdvertisementDetail,
   deleteRepository,
   getActiveAdvertisementFeed,
+  getCanvaProductFinancials,
   getAdvertisementById,
+  generateCanvaAdvertisementExport,
   listAdvertisements,
   listRepositories,
   updateAdvertisement,
@@ -48,6 +50,7 @@ const mediaUpload = multer({
 });
 
 router.get('/active-feed', getActiveAdvertisementFeed);
+router.get('/canva/product-financials', getCanvaProductFinancials);
 
 router.use(protectPOS);
 router.use(admin);
@@ -77,6 +80,8 @@ router.route('/:id')
   .get(getAdvertisementById)
   .put(updateAdvertisement)
   .delete(deleteAdvertisement);
+
+router.post('/:id/canva-export', generateCanvaAdvertisementExport);
 
 router.post('/:advertisementId/details', createAdvertisementDetail);
 router.route('/:advertisementId/details/:detailId')

@@ -103,6 +103,7 @@ export const InventoryProduct = {
   to_char(ip.mfg_date, 'YYYY-MM-DD') AS mfg_date,
         pb.mk_barcode,
         pb.barcode,
+        pb.image_url,
         pb.quantity AS barcode_quantity,
         ip.product_barcode_id AS mkid,
         p.product_code,
@@ -139,6 +140,7 @@ export const InventoryProduct = {
         to_char(ip.mfg_date::date, 'YYYY-MM-DD') AS mfg_date,
         pb.mk_barcode,
         pb.barcode,
+        pb.image_url,
         pb.quantity AS barcode_quantity,
         ip.product_barcode_id AS mkid,
         p.product_code,
@@ -235,8 +237,24 @@ export const InventoryProduct = {
     const finalExpDate = toPgDate(exp_date);
     const finalMfgDate = toPgDate(mfg_date);
 
+    let resolvedProductBarcodeId = product_barcode_id;
+    const mkBarcode = data.MK_BARCODE || data.mk_barcode || data.mkBarcode || data.barcode;
+
+    if (!resolvedProductBarcodeId && mkBarcode) {
+      const barcodeLookup = await query(
+        `
+        SELECT id
+        FROM catalog.product_barcodes
+        WHERE mk_barcode = $1 OR barcode = $1
+        LIMIT 1
+        `,
+        [String(mkBarcode)]
+      );
+      resolvedProductBarcodeId = barcodeLookup.rows[0]?.id;
+    }
+
     if (!purchase_order_id) throw new Error('purchase_order_id is required');
-    if (!product_barcode_id) throw new Error('product_barcode_id is required');
+    if (!resolvedProductBarcodeId) throw new Error('product_barcode_id or MK_BARCODE is required');
     if (!batch_id) throw new Error('batch_id is required');
     if (!warehouse_id) throw new Error('warehouse_id is required');
     if (!finalExpDate) throw new Error('Valid exp_date is required');
@@ -280,7 +298,7 @@ export const InventoryProduct = {
         WHERE pb.id = $1
         LIMIT 1
         `,
-        [Number(product_barcode_id)]
+        [Number(resolvedProductBarcodeId)]
       );
 
       const product = productResult.rows[0];

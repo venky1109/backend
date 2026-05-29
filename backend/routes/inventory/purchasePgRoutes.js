@@ -20,6 +20,7 @@ import {
   updatePurchaseOrderItems,
   verifyReceivedPurchaseOrder,
 } from '../../controllers/inventory/supplyController.js';
+import { rollbackPurchaseInventory } from '../../controllers/inventory/rollbackController.js';
 
 import {
   protectPOS,
@@ -38,6 +39,7 @@ router
 
 router.post('/orders-with-items', createPurchaseOrderWithItems);
 router.get('/orders-detailed', getPurchaseOrdersDetailed);
+router.put('/orders/:id/rollback', rollbackPurchaseInventory);
 router.put('/orders/:id/items', updatePurchaseOrderItems);
 router.put('/orders/:id/verify-received', verifyReceivedPurchaseOrder);
 
