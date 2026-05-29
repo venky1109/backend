@@ -196,7 +196,11 @@ const normalizePackingConfigs = (item = {}) => {
   }));
 };
 
-const validatePackingConfigs = (configs = [], itemId = 'item') => {
+const validatePackingConfigs = (
+  configs = [],
+  itemId = 'item',
+  { requireRatePlan = true } = {}
+) => {
   for (const config of configs) {
     if (!config.product_barcode_id) {
       throw new Error(`Packing product barcode is required for dispatch ${itemId}`);
@@ -206,7 +210,7 @@ const validatePackingConfigs = (configs = [], itemId = 'item') => {
       throw new Error(`Packing quantity must be greater than 0 for dispatch ${itemId}`);
     }
 
-    if (!config.rate_plan_id) {
+    if (requireRatePlan && !config.rate_plan_id) {
       throw new Error(`Rate plan is required for dispatch ${itemId}`);
     }
   }
@@ -326,6 +330,29 @@ const fetchRatePlansByIds = async (client, ratePlanIds = []) => {
   return new Map(rows.map((row) => [Number(row.id), row]));
 };
 
+const fetchDefaultRatePlansByBarcodeIds = async (client, productBarcodeIds = []) => {
+  const ids = [...new Set(productBarcodeIds.map(Number).filter(Number.isFinite))];
+  if (!ids.length) return new Map();
+
+  await ensureCatalogRatePlansTable(client);
+
+  const { rows } = await client.query(
+    `
+    SELECT DISTINCT ON (product_barcode_id)
+      *
+    FROM catalog.rate_plans
+    WHERE product_barcode_id = ANY($1::bigint[])
+    ORDER BY
+      product_barcode_id,
+      CASE WHEN lower(rate_for) = 'internal_packing' THEN 0 ELSE 1 END,
+      id ASC
+    `,
+    [ids]
+  );
+
+  return new Map(rows.map((row) => [Number(row.product_barcode_id), row]));
+};
+
 const applyRatePlanDefaults = (config = {}, ratePlansById = new Map()) => {
   const ratePlan = ratePlansById.get(Number(config.rate_plan_id));
   if (!ratePlan) return config;
@@ -345,12 +372,33 @@ const applyRatePlanDefaults = (config = {}, ratePlansById = new Map()) => {
 };
 
 const applyRatePlansToPackingConfigs = async (client, configs = []) => {
-  const ratePlans = await fetchRatePlansByIds(
+  const ratePlansById = await fetchRatePlansByIds(
     client,
     configs.map((config) => config.rate_plan_id)
   );
+  const defaultRatePlansByBarcodeId = await fetchDefaultRatePlansByBarcodeIds(
+    client,
+    configs
+      .filter((config) => !config.rate_plan_id)
+      .map((config) => config.product_barcode_id)
+  );
 
-  return configs.map((config) => applyRatePlanDefaults(config, ratePlans));
+  return configs.map((config) => {
+    if (config.rate_plan_id) {
+      return applyRatePlanDefaults(config, ratePlansById);
+    }
+
+    const defaultRatePlan = defaultRatePlansByBarcodeId.get(
+      Number(config.product_barcode_id)
+    );
+
+    return defaultRatePlan
+      ? applyRatePlanDefaults(
+          { ...config, rate_plan_id: Number(defaultRatePlan.id) },
+          new Map([[Number(defaultRatePlan.id), defaultRatePlan]])
+        )
+      : config;
+  });
 };
 
 const calculatePackedUnitPrice = ({ explicitPrice, sourceProduct, packingBarcode, packingConfig }) => {
@@ -595,7 +643,7 @@ const validateDispatchItems = (items = []) => {
       throw new Error('No. of units or packing configuration is required for every dispatch item');
     }
 
-    validatePackingConfigs(packingConfigs, 'item');
+    validatePackingConfigs(packingConfigs, 'item', { requireRatePlan: false });
   }
 };
 
@@ -643,7 +691,10 @@ const hydrateDispatchItemsFromBarcodes = async (client, items = []) => {
     }
 
     const barcodeInfo = barcodeResult.rows[0];
-    const packingConfigs = normalizePackingConfigs(item);
+    const packingConfigs = await applyRatePlansToPackingConfigs(
+      client,
+      normalizePackingConfigs(item)
+    );
     const packingRows = [];
 
     validatePackingConfigs(packingConfigs, 'item');
