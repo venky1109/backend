@@ -5,9 +5,105 @@ import {
 } from '../../models/marketing/advertisementModels.js';
 import { query } from '../../config/pg.js';
 import Product from '../../models/productModel.js';
+import Order from '../../models/orderModel.js';
 
 const userLabel = (req) =>
   req.user?.username || req.user?.name || req.user?._id?.toString() || '';
+
+const hasBillPurposeText = (...values) =>
+  values
+    .filter(Boolean)
+    .some((value) => String(value).toLowerCase().includes('bill purpose'));
+
+const getTopMovingProductsByCategory = async ({ days = 30, perCategory = 8, categoryLimit = 12 } = {}) => {
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - Number(days || 30));
+
+  const rows = await Order.aggregate([
+    { $match: { createdAt: { $gte: startDate } } },
+    { $unwind: '$orderItems' },
+    {
+      $group: {
+        _id: {
+          productId: { $ifNull: ['$orderItems.productId', '$orderItems.product'] },
+          brandId: '$orderItems.brandId',
+          financialId: '$orderItems.financialId',
+        },
+        productId: { $first: { $ifNull: ['$orderItems.productId', '$orderItems.product'] } },
+        brandId: { $first: '$orderItems.brandId' },
+        financialId: { $first: '$orderItems.financialId' },
+        product_name: { $first: '$orderItems.name' },
+        brand_name: { $first: '$orderItems.brand' },
+        quantity: { $first: '$orderItems.quantity' },
+        units: { $first: '$orderItems.units' },
+        media_path: { $first: '$orderItems.image' },
+        sale_price_from_order: { $first: '$orderItems.price' },
+        qty_sold: { $sum: { $ifNull: ['$orderItems.qty', 0] } },
+        revenue: {
+          $sum: {
+            $multiply: [
+              { $ifNull: ['$orderItems.qty', 0] },
+              { $ifNull: ['$orderItems.price', 0] },
+            ],
+          },
+        },
+      },
+    },
+    { $sort: { qty_sold: -1, revenue: -1, product_name: 1 } },
+  ]);
+
+  const productIds = rows.map((row) => row.productId).filter(Boolean);
+  const products = await Product.find({ _id: { $in: productIds } })
+    .select('_id category details')
+    .lean();
+  const productMap = new Map(products.map((product) => [String(product._id), product]));
+  const grouped = new Map();
+
+  for (const row of rows) {
+    const product = productMap.get(String(row.productId));
+    const category = product?.category || 'Top Movers';
+    const brand = (product?.details || []).find((detail) => String(detail._id) === String(row.brandId));
+    const financial = (brand?.financials || []).find((item) => String(item._id) === String(row.financialId));
+    if (hasBillPurposeText(category, row.product_name, row.brand_name, brand?.brandName || brand?.brand)) continue;
+
+    const orderSalePrice = Number(row.sale_price_from_order || 0);
+    const salePrice = Number(financial?.dprice || orderSalePrice || financial?.price || 0);
+    const mrp = Number(financial?.price || (financial?.dprice && orderSalePrice > financial.dprice ? orderSalePrice : 0));
+    const discountAmount = mrp && salePrice && mrp > salePrice ? mrp - salePrice : 0;
+    const discountPercent = discountAmount ? Math.round((discountAmount / mrp) * 100) : 0;
+    if (!salePrice || salePrice < 10) continue;
+
+    if (!grouped.has(category)) grouped.set(category, []);
+    const items = grouped.get(category);
+    if (items.length >= perCategory) continue;
+
+    items.push({
+      title: `${Math.round(row.qty_sold || 0)} sold in 30 days`,
+      product_name: row.product_name || '',
+      brand_name: row.brand_name || '',
+      media_type: 'image',
+      media_path: row.media_path || brand?.images?.[0]?.image || '',
+      description: mrp ? `Rs. ${salePrice.toFixed(2)} instead of Rs. ${mrp.toFixed(2)}` : `Rs. ${salePrice.toFixed(2)}`,
+      duration_seconds: 6,
+      metadata: {
+        quantity: row.quantity || financial?.quantity || null,
+        units: row.units || financial?.units || null,
+        sale_price: salePrice || null,
+        mrp: mrp || null,
+        discount_amount: discountAmount || null,
+        discount_percent: discountPercent || null,
+        qty_sold_30_days: row.qty_sold || 0,
+        category,
+        slide_kind: 'top_movers',
+      },
+    });
+  }
+
+  return [...grouped.entries()]
+    .filter(([, products]) => products.length)
+    .slice(0, Math.max(Number(categoryLimit || 12), 1))
+    .map(([category, products]) => ({ category, products }));
+};
 
 export const listRepositories = async (req, res, next) => {
   try {
@@ -158,9 +254,15 @@ export const getActiveAdvertisementFeed = async (req, res, next) => {
     const rows = await OutletAdvertise.findActiveFeed({
       outletId: req.query.outlet_id || req.query.outletId,
     });
+    const topMovingCategories = await getTopMovingProductsByCategory({
+      days: Number(req.query.moving_days || 30),
+      perCategory: Number(req.query.moving_limit || 8),
+      categoryLimit: Number(req.query.moving_categories || 12),
+    });
     res.json({
       generated_at: new Date().toISOString(),
       advertisements: rows,
+      top_moving_categories: topMovingCategories,
     });
   } catch (error) {
     next(error);
