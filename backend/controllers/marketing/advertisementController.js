@@ -19,9 +19,7 @@ const hasBillPurposeText = (...values) =>
     .some((value) => String(value).toLowerCase().includes('bill purpose'));
 
 const getUploadRoot = () =>
-  process.env.NODE_ENV === 'production'
-    ? '/var/data/uploads'
-    : path.join(process.cwd(), 'uploads');
+  process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
 
 const extensionFromMedia = (mediaUrl, contentType = '') => {
   try {
@@ -49,7 +47,7 @@ const cacheRemoteMediaPath = async (mediaPath) => {
   const existingFiles = await fs.readdir(cacheDir).catch(() => []);
   const existingFile = existingFiles.find((file) => file.startsWith(`${hash}.`));
   if (existingFile) {
-    return `/uploads/advertisements/remote-cache/${existingFile}`;
+    return `/api/advertisements/cached-media/${existingFile}`;
   }
 
   const response = await fetch(mediaPath);
@@ -59,7 +57,28 @@ const cacheRemoteMediaPath = async (mediaPath) => {
   const filename = `${hash}${extension}`;
   const buffer = Buffer.from(await response.arrayBuffer());
   await fs.writeFile(path.join(cacheDir, filename), buffer);
-  return `/uploads/advertisements/remote-cache/${filename}`;
+  return `/api/advertisements/cached-media/${filename}`;
+};
+
+export const serveCachedAdvertisementMedia = async (req, res, next) => {
+  try {
+    const filename = path.basename(req.params.filename || '');
+    if (!filename || filename !== req.params.filename) {
+      return res.status(400).json({ message: 'Invalid media file' });
+    }
+
+    const filePath = path.join(getUploadRoot(), 'advertisements', 'remote-cache', filename);
+    res.sendFile(filePath, (error) => {
+      if (error) {
+        if (!res.headersSent) next(error);
+        return;
+      }
+
+      fs.unlink(filePath).catch(() => {});
+    });
+  } catch (error) {
+    next(error);
+  }
 };
 
 const localizeMediaPaths = async (rows, topMovingCategories) => {

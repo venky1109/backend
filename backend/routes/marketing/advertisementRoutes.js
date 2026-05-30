@@ -15,6 +15,7 @@ import {
   generateCanvaAdvertisementExport,
   listAdvertisements,
   listRepositories,
+  serveCachedAdvertisementMedia,
   updateAdvertisement,
   updateAdvertisementDetail,
   updateRepository,
@@ -51,6 +52,7 @@ const mediaUpload = multer({
 
 router.get('/active-feed', getActiveAdvertisementFeed);
 router.get('/canva/product-financials', getCanvaProductFinancials);
+router.get('/cached-media/:filename', serveCachedAdvertisementMedia);
 
 router.use(protectPOS);
 router.use(admin);
