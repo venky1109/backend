@@ -3,6 +3,9 @@ import {
   OutletAdvertiseDetail,
   Repository,
 } from '../../models/marketing/advertisementModels.js';
+import crypto from 'crypto';
+import fs from 'fs/promises';
+import path from 'path';
 import { query } from '../../config/pg.js';
 import Product from '../../models/productModel.js';
 import Order from '../../models/orderModel.js';
@@ -14,6 +17,71 @@ const hasBillPurposeText = (...values) =>
   values
     .filter(Boolean)
     .some((value) => String(value).toLowerCase().includes('bill purpose'));
+
+const getUploadRoot = () =>
+  process.env.NODE_ENV === 'production'
+    ? '/var/data/uploads'
+    : path.join(process.cwd(), 'uploads');
+
+const extensionFromMedia = (mediaUrl, contentType = '') => {
+  try {
+    const pathname = decodeURIComponent(new URL(mediaUrl).pathname);
+    const extension = path.extname(pathname);
+    if (extension) return extension.split('?')[0];
+  } catch {
+    // Fall through to content type detection.
+  }
+
+  if (contentType.includes('webp')) return '.webp';
+  if (contentType.includes('png')) return '.png';
+  if (contentType.includes('jpeg') || contentType.includes('jpg')) return '.jpg';
+  if (contentType.includes('mp4')) return '.mp4';
+  return '.bin';
+};
+
+const cacheRemoteMediaPath = async (mediaPath) => {
+  if (!/^https?:\/\//i.test(mediaPath || '')) return mediaPath || '';
+
+  const cacheDir = path.join(getUploadRoot(), 'advertisements', 'remote-cache');
+  await fs.mkdir(cacheDir, { recursive: true });
+
+  const hash = crypto.createHash('sha1').update(mediaPath).digest('hex');
+  const existingFiles = await fs.readdir(cacheDir).catch(() => []);
+  const existingFile = existingFiles.find((file) => file.startsWith(`${hash}.`));
+  if (existingFile) {
+    return `/uploads/advertisements/remote-cache/${existingFile}`;
+  }
+
+  const response = await fetch(mediaPath);
+  if (!response.ok) return mediaPath;
+
+  const extension = extensionFromMedia(mediaPath, response.headers.get('content-type') || '');
+  const filename = `${hash}${extension}`;
+  const buffer = Buffer.from(await response.arrayBuffer());
+  await fs.writeFile(path.join(cacheDir, filename), buffer);
+  return `/uploads/advertisements/remote-cache/${filename}`;
+};
+
+const localizeMediaPaths = async (rows, topMovingCategories) => {
+  const advertisements = await Promise.all((rows || []).map(async (ad) => ({
+    ...ad,
+    generated_video_path: await cacheRemoteMediaPath(ad.generated_video_path),
+    details: await Promise.all((ad.details || []).map(async (detail) => ({
+      ...detail,
+      media_path: await cacheRemoteMediaPath(detail.media_path),
+    }))),
+  })));
+
+  const categories = await Promise.all((topMovingCategories || []).map(async (category) => ({
+    ...category,
+    products: await Promise.all((category.products || []).map(async (product) => ({
+      ...product,
+      media_path: await cacheRemoteMediaPath(product.media_path),
+    }))),
+  })));
+
+  return { advertisements, topMovingCategories: categories };
+};
 
 const getTopMovingProductsByCategory = async ({ days = 30, perCategory = 8, categoryLimit = 12 } = {}) => {
   const startDate = new Date();
@@ -259,10 +327,11 @@ export const getActiveAdvertisementFeed = async (req, res, next) => {
       perCategory: Number(req.query.moving_limit || 8),
       categoryLimit: Number(req.query.moving_categories || 12),
     });
+    const localizedFeed = await localizeMediaPaths(rows, topMovingCategories);
     res.json({
       generated_at: new Date().toISOString(),
-      advertisements: rows,
-      top_moving_categories: topMovingCategories,
+      advertisements: localizedFeed.advertisements,
+      top_moving_categories: localizedFeed.topMovingCategories,
     });
   } catch (error) {
     next(error);
