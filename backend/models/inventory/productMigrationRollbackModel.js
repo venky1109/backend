@@ -1,4 +1,5 @@
 import { getClient, query } from '../../config/pg.js';
+import Product from '../productModel.js';
 
 const ROLLBACK_SCOPES = new Set([
   'single_transaction',
@@ -71,6 +72,19 @@ const parsePurchaseOrderId = (source) => {
   return match ? Number(match[1]) : null;
 };
 
+const parseLocationId = (value, expectedType) => {
+  const parts = String(value || '').split(':');
+  if (parts[0]?.toLowerCase() !== expectedType) return null;
+
+  const id = Number(parts[1]);
+  return Number.isFinite(id) ? id : null;
+};
+
+const toBarcodeArray = (value) => {
+  if (Array.isArray(value)) return value.filter(Boolean).map(String);
+  return value ? [String(value)] : [];
+};
+
 const isMissingRequestTrackingSchema = (error) => {
   return (
     error?.code === '42P01' &&
@@ -101,6 +115,9 @@ const normalizeInput = (data = {}) => {
   return {
     request_id: toNumber(data.request_id ?? data.requestId),
     transaction_id: toNumber(data.transaction_id ?? data.transactionId),
+    dispatch_order_id: toNumber(
+      data.dispatch_order_id ?? data.dispatchOrderId ?? data.dispatch_id
+    ),
     product_id: toNumber(data.product_id ?? data.productId),
     product_barcode_id: toNumber(
       data.product_barcode_id ??
@@ -114,9 +131,11 @@ const normalizeInput = (data = {}) => {
     outlet_id: data.outlet_id ?? data.outletId ?? null,
     warehouse_id: toNumber(data.warehouse_id ?? data.warehouseId),
     quantity:
-      data.quantity === undefined || data.quantity === null || data.quantity === ''
+      (data.quantity ?? data.rollback_quantity) === undefined ||
+      (data.quantity ?? data.rollback_quantity) === null ||
+      (data.quantity ?? data.rollback_quantity) === ''
         ? null
-        : toPositiveNumber(data.quantity, 'quantity'),
+        : toPositiveNumber(data.quantity ?? data.rollback_quantity, 'quantity'),
     scope,
     reason: data.reason || data.rollback_reason || null,
     cleanup: data.cleanup || data.rollback_context || {},
@@ -132,7 +151,7 @@ const getRequestById = async (db, requestId, lock = false) => {
     SELECT *
     FROM request_tracking.requests
     WHERE id = $1
-      AND request_type = 'inventory_migration'
+      AND request_type IN ('inventory_migration', 'inventory_dispatch_to_outlet')
     ${lock ? 'FOR UPDATE' : ''}
     `,
     [Number(requestId)]
@@ -150,10 +169,42 @@ const getStockTransactionById = async (db, transactionId) => {
       `
       SELECT
         st.*,
-        rt.request_id,
-        COALESCE(rt.product_barcode_id, ip.product_barcode_id) AS product_barcode_id,
-        ip.inventory_product_id
+        COALESCE(odr.request_id, rt.request_id) AS request_id,
+        COALESCE(odr.product_barcode_id, rt.product_barcode_id, ip.product_barcode_id) AS product_barcode_id,
+        COALESCE(odr.inventory_product_id, ip.inventory_product_id) AS inventory_product_id,
+        odr.dispatch_order_id
       FROM inventory.stock_transaction st
+      LEFT JOIN LATERAL (
+        SELECT
+          r.id AS request_id,
+          d.id AS dispatch_order_id,
+          doi.product_barcode_id,
+          doi.inventory_product_id
+        FROM dispatch.dispatch_order d
+        JOIN dispatch.dispatch_order_items doi
+          ON doi.dispatch_order_id = d.id
+        JOIN catalog.product_barcodes pb
+          ON pb.id = doi.product_barcode_id
+        LEFT JOIN request_tracking.requests r
+          ON r.request_type = 'inventory_dispatch_to_outlet'
+         AND (
+           r.reference_id = d.id::text
+           OR r.payload->>'dispatch_order_id' = d.id::text
+           OR r.request_key = ('DISPATCH_ORDER:' || d.id::text)
+         )
+        WHERE d.destination ILIKE 'outlet:%'
+          AND pb.product_id = st.product_id
+          AND (
+            st.ref_type = 'PURCHASE_VERIFIED'
+            OR st.ref_type = 'INVENTORY_DISPATCH_OUT'
+          )
+          AND (
+            st.ref_type <> 'PURCHASE_VERIFIED'
+            OR d.purchase_order_id::text = REPLACE(COALESCE(st.source, ''), 'PURCHASE_ORDER:', '')
+          )
+        ORDER BY d.updated_at DESC, d.id DESC
+        LIMIT 1
+      ) odr ON TRUE
       LEFT JOIN LATERAL (
         SELECT
           r.id AS request_id,
@@ -698,6 +749,582 @@ const addRollbackBlockingWarnings = (
   }
 };
 
+const hasFinancialBarcode = (financial, codes = []) => {
+  const barcodes = codes.map(String);
+  return (
+    barcodes.includes(String(financial?.MK_BARCODE || '')) ||
+    barcodes.includes(String(financial?.mkBarcode || '')) ||
+    toBarcodeArray(financial?.barcode).some((barcode) => barcodes.includes(barcode))
+  );
+};
+
+const findMongoFinancial = async (mkBarcode, catalogProductBarcodeId = null) => {
+  const barcodes = toBarcodeArray(mkBarcode);
+  if (!barcodes.length && !catalogProductBarcodeId) return null;
+
+  const product =
+    (catalogProductBarcodeId
+      ? await Product.findOne({
+          'details.financials.catalogProductBarcodeId': Number(catalogProductBarcodeId),
+        })
+      : null) ||
+    (barcodes.length
+      ? await Product.findOne({ 'details.financials.MK_BARCODE': { $in: barcodes } })
+      : null) ||
+    (barcodes.length
+      ? await Product.findOne({ 'details.financials.mkBarcode': { $in: barcodes } })
+      : null) ||
+    (barcodes.length
+      ? await Product.findOne({ 'details.financials.barcode': { $in: barcodes } })
+      : null);
+
+  if (!product) return null;
+
+  for (const detail of product.details || []) {
+    const financial = (detail.financials || []).find(
+      (item) =>
+        Number(item.catalogProductBarcodeId) === Number(catalogProductBarcodeId) ||
+        hasFinancialBarcode(item, barcodes)
+    );
+
+    if (financial) return { product, detail, financial };
+  }
+
+  return null;
+};
+
+const getDispatchOrderIdFromRequest = (input, requestRow) => {
+  const payload = parsePayload(requestRow?.payload);
+
+  return toNumber(
+    input.dispatch_order_id ||
+      payload.dispatch_order_id ||
+      requestRow?.dispatch_order_id ||
+      (requestRow?.request_type === 'inventory_dispatch_to_outlet'
+        ? requestRow?.reference_id
+        : null)
+  );
+};
+
+const getDispatchReceiveRequest = async (db, dispatchOrderId, lock = false) => {
+  if (!dispatchOrderId) return null;
+
+  const { rows } = await runQuery(
+    db,
+    `
+    SELECT *
+    FROM request_tracking.requests
+    WHERE request_type = 'inventory_dispatch_to_outlet'
+      AND (
+        reference_id = $1::text
+        OR payload->>'dispatch_order_id' = $1::text
+        OR request_key = ('DISPATCH_ORDER:' || $1::text)
+      )
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 1
+    ${lock ? 'FOR UPDATE' : ''}
+    `,
+    [String(dispatchOrderId)]
+  );
+
+  return rows[0] || null;
+};
+
+const getOutletDispatchOrderIdForTransaction = async (db, transaction, input = {}) => {
+  if (!transaction) return null;
+
+  const refType = String(transaction.ref_type || '').toUpperCase();
+  const productId = toNumber(transaction.product_id || input.product_id);
+  const productBarcodeId = toNumber(transaction.product_barcode_id || input.product_barcode_id);
+  const warehouseId = toNumber(input.warehouse_id);
+  const outletId = toNumber(input.outlet_id);
+
+  if (transaction.dispatch_order_id) {
+    return toNumber(transaction.dispatch_order_id);
+  }
+
+  if (!productId) return null;
+
+  if (refType === 'INVENTORY_DISPATCH_OUT') {
+    const qtyOut = toNumber(transaction.qty_out);
+    const { rows } = await runQuery(
+      db,
+      `
+      SELECT d.id
+      FROM dispatch.dispatch_order d
+      JOIN dispatch.dispatch_order_items doi
+        ON doi.dispatch_order_id = d.id
+      JOIN catalog.product_barcodes pb
+        ON pb.id = doi.product_barcode_id
+      WHERE d.destination ILIKE 'outlet:%'
+        AND pb.product_id = $1
+        AND ($2::bigint IS NULL OR doi.product_barcode_id = $2)
+        AND ($3::numeric IS NULL OR COALESCE(doi.no_of_units, doi.qty, 0)::numeric = $3 OR doi.inventory_product_id = $7)
+        AND (
+          $4::text IS NULL
+          OR LOWER(d.source) = LOWER($4)
+          OR LOWER(d.source) LIKE LOWER($4 || ':%')
+          OR ($8::bigint IS NOT NULL AND d.source ILIKE ('warehouse:' || $8::text || ':%'))
+        )
+        AND (
+          $5::text IS NULL
+          OR LOWER(d.destination) = LOWER($5)
+          OR LOWER(d.destination) LIKE LOWER($5 || ':%')
+          OR ($9::bigint IS NOT NULL AND d.destination ILIKE ('outlet:' || $9::text || ':%'))
+        )
+      ORDER BY ABS(EXTRACT(EPOCH FROM (COALESCE(d.updated_at, d.created_at, NOW()) - COALESCE($6::timestamp, d.updated_at, d.created_at, NOW())))) ASC,
+        d.updated_at DESC,
+        d.id DESC
+      LIMIT 1
+      `,
+      [
+        Number(productId),
+        productBarcodeId ? Number(productBarcodeId) : null,
+        qtyOut ? Number(qtyOut) : null,
+        transaction.source || null,
+        transaction.destination || null,
+        transaction.created_at || null,
+        transaction.inventory_product_id ? Number(transaction.inventory_product_id) : null,
+        warehouseId ? Number(warehouseId) : null,
+        outletId ? Number(outletId) : null,
+      ]
+    );
+
+    if (rows[0]?.id) return toNumber(rows[0].id);
+
+    const fallbackResult = await runQuery(
+      db,
+      `
+      SELECT d.id
+      FROM dispatch.dispatch_order d
+      JOIN dispatch.dispatch_order_items doi
+        ON doi.dispatch_order_id = d.id
+      JOIN catalog.product_barcodes pb
+        ON pb.id = doi.product_barcode_id
+      WHERE d.destination ILIKE 'outlet:%'
+        AND pb.product_id = $1
+        AND ($2::bigint IS NULL OR doi.product_barcode_id = $2)
+        AND ($3::bigint IS NULL OR d.source ILIKE ('warehouse:' || $3::text || ':%'))
+        AND ($4::bigint IS NULL OR d.destination ILIKE ('outlet:' || $4::text || ':%'))
+      ORDER BY d.updated_at DESC, d.id DESC
+      LIMIT 1
+      `,
+      [
+        Number(productId),
+        productBarcodeId ? Number(productBarcodeId) : null,
+        warehouseId ? Number(warehouseId) : null,
+        outletId ? Number(outletId) : null,
+      ]
+    );
+
+    return toNumber(fallbackResult.rows[0]?.id);
+  }
+
+  if (refType === 'PURCHASE_VERIFIED') {
+    const purchaseOrderId = parsePurchaseOrderId(transaction.source);
+    const transactionWarehouseId = parseWarehouseId(transaction.destination) || warehouseId;
+    const { rows } = await runQuery(
+      db,
+      `
+      SELECT d.id
+      FROM dispatch.dispatch_order d
+      JOIN dispatch.dispatch_order_items doi
+        ON doi.dispatch_order_id = d.id
+      JOIN catalog.product_barcodes pb
+        ON pb.id = doi.product_barcode_id
+      WHERE d.destination ILIKE 'outlet:%'
+        AND pb.product_id = $1
+        AND ($2::bigint IS NULL OR doi.product_barcode_id = $2)
+        AND ($3::bigint IS NULL OR d.purchase_order_id = $3)
+        AND (
+          $4::bigint IS NULL
+          OR d.source ILIKE ('warehouse:' || $4::text || ':%')
+          OR d.source = ('WAREHOUSE:' || $4::text)
+        )
+        AND ($5::bigint IS NULL OR d.destination ILIKE ('outlet:' || $5::text || ':%'))
+      ORDER BY d.updated_at DESC, d.id DESC
+      LIMIT 1
+      `,
+      [
+        Number(productId),
+        productBarcodeId ? Number(productBarcodeId) : null,
+        purchaseOrderId ? Number(purchaseOrderId) : null,
+        transactionWarehouseId ? Number(transactionWarehouseId) : null,
+        outletId ? Number(outletId) : null,
+      ]
+    );
+
+    return toNumber(rows[0]?.id);
+  }
+
+  return null;
+};
+
+const getOutletDispatchRows = async (db, dispatchOrderId, lock = false) => {
+  if (!dispatchOrderId) return { order: null, items: [] };
+
+  const orderResult = await runQuery(
+    db,
+    `
+    SELECT *
+    FROM dispatch.dispatch_order
+    WHERE id = $1
+    ${lock ? 'FOR UPDATE' : ''}
+    `,
+    [Number(dispatchOrderId)]
+  );
+  const order = orderResult.rows[0] || null;
+
+  if (!order) return { order: null, items: [] };
+
+  const itemsResult = await runQuery(
+    db,
+    `
+    SELECT
+      doi.*,
+      pb.product_id AS catalog_product_id,
+      pb.mk_barcode,
+      COALESCE(pb.barcode, pb.mk_barcode) AS barcode,
+      COALESCE(p.product_name_eng, p.product_name_tel, p.product_code) AS product_name,
+      ip.no_of_units AS inventory_units,
+      ip.count_in_stock AS inventory_count_in_stock,
+      ip.warehouse_id AS inventory_warehouse_id,
+      ip.purchase_order_id AS inventory_purchase_order_id,
+      ip.purchase_order_item_id AS inventory_purchase_order_item_id
+    FROM dispatch.dispatch_order_items doi
+    JOIN catalog.product_barcodes pb
+      ON pb.id = doi.product_barcode_id
+    LEFT JOIN catalog.products p
+      ON p.id = pb.product_id
+    LEFT JOIN inventory.inventory_products ip
+      ON ip.id = doi.inventory_product_id
+    WHERE doi.dispatch_order_id = $1
+    ORDER BY doi.id
+    ${lock ? 'FOR UPDATE OF doi' : ''}
+    `,
+    [Number(dispatchOrderId)]
+  );
+
+  return { order, items: itemsResult.rows };
+};
+
+const productMatchesInput = (input, item) => {
+  if (
+    input.product_id &&
+    Number(input.product_id) !== Number(item.catalog_product_id || item.product_id)
+  ) {
+    return false;
+  }
+
+  if (
+    input.product_barcode_id &&
+    Number(input.product_barcode_id) !== Number(item.product_barcode_id)
+  ) {
+    return false;
+  }
+
+  if (
+    input.mk_barcode &&
+    ![item.mk_barcode, item.barcode].filter(Boolean).map(String).includes(String(input.mk_barcode))
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+const getOutletReceiveStockSnapshots = async (db, requestId) => {
+  if (!requestId) return new Map();
+
+  const { rows } = await runQuery(
+    db,
+    `
+    SELECT event_payload
+    FROM request_tracking.request_events
+    WHERE request_id = $1
+      AND event_payload ? 'updatedProducts'
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+    `,
+    [Number(requestId)]
+  );
+
+  const payload = parsePayload(rows[0]?.event_payload);
+  const products = Array.isArray(payload.updatedProducts) ? payload.updatedProducts : [];
+  const snapshots = new Map();
+
+  for (const product of products) {
+    const keys = [
+      product.product_barcode_id,
+      product.productBarcodeId,
+      ...(Array.isArray(product.barcode) ? product.barcode : [product.barcode]),
+    ]
+      .filter((value) => value !== undefined && value !== null && value !== '')
+      .map((value) => String(value));
+
+    for (const key of keys) {
+      snapshots.set(key, product);
+    }
+  }
+
+  return snapshots;
+};
+
+const buildOutletMigrationPreview = async (db, input, selectedRequest, { lock = false } = {}) => {
+  const dispatchOrderId = getDispatchOrderIdFromRequest(input, selectedRequest);
+
+  if (!dispatchOrderId) {
+    throw new Error('dispatch_order_id is required for outlet migration rollback');
+  }
+
+  const { order, items } = await getOutletDispatchRows(db, dispatchOrderId, lock);
+
+  if (!order) {
+    throw new Error('Dispatch order not found for outlet migration rollback');
+  }
+
+  const destinationType = String(order.destination || '').split(':')[0].toLowerCase();
+  const status = String(order.dispatch_status || '').toLowerCase();
+  const warnings = [];
+
+  if (destinationType !== 'outlet') {
+    warnings.push('Dispatch destination is not an outlet.');
+  }
+
+  if (!['dispatched', 'received_to_outlet'].includes(status)) {
+    warnings.push(`Only dispatched or received outlet migrations can be rolled back. Current status: ${status || 'unknown'}.`);
+  }
+
+  const selectedItems = items.filter((item) => productMatchesInput(input, item));
+
+  if (!selectedItems.length) {
+    throw new Error('No matching dispatch products found for outlet migration rollback');
+  }
+
+  const dispatchReceiveRequest = await getDispatchReceiveRequest(db, dispatchOrderId, lock);
+  const trackingRequest =
+    selectedRequest?.request_type === 'inventory_dispatch_to_outlet'
+      ? selectedRequest
+      : dispatchReceiveRequest || selectedRequest;
+  const receiveStockSnapshots = await getOutletReceiveStockSnapshots(db, trackingRequest?.id);
+  const affectedProducts = [];
+
+  for (const item of selectedItems) {
+    const rollbackQty = input.quantity || Number(item.no_of_units || item.qty || 0);
+    const mongoMatch =
+      status === 'received_to_outlet'
+        ? await findMongoFinancial(item.mk_barcode || item.barcode, item.product_barcode_id)
+        : null;
+    const mongoStockBefore = mongoMatch ? Number(mongoMatch.financial.countInStock || 0) : null;
+    const receiveSnapshot =
+      receiveStockSnapshots.get(String(item.product_barcode_id)) ||
+      receiveStockSnapshots.get(String(item.mk_barcode || '')) ||
+      receiveStockSnapshots.get(String(item.barcode || '')) ||
+      null;
+    const mongoStockAfter =
+      mongoStockBefore === null ? null : mongoStockBefore - rollbackQty;
+    const warehouseId =
+      parseLocationId(order.source, 'warehouse') ||
+      item.inventory_warehouse_id ||
+      null;
+    const inventoryProduct = {
+      id: item.inventory_product_id,
+      product_barcode_id: item.product_barcode_id,
+      catalog_product_id: item.catalog_product_id || item.product_id,
+      product_id: item.catalog_product_id || item.product_id,
+      warehouse_id: warehouseId,
+    };
+    const requestLike = {
+      id: selectedRequest?.id || null,
+      product_barcode_id: item.product_barcode_id,
+      inventory_product_id: item.inventory_product_id,
+      warehouse_id: warehouseId,
+      payload: {
+        purchase_order_id: order.purchase_order_id || item.inventory_purchase_order_id,
+        purchase_order_item_id: item.inventory_purchase_order_item_id,
+        product_id: item.catalog_product_id || item.product_id,
+        product_barcode_id: item.product_barcode_id,
+        inventory_product_id: item.inventory_product_id,
+        warehouse_id: warehouseId,
+        no_of_units: rollbackQty,
+      },
+    };
+    const transaction = await getRelatedStockTransaction(
+      db,
+      { ...input, transaction_id: null },
+      requestLike,
+      inventoryProduct
+    );
+    const purchaseContext = await getPurchaseContext(
+      db,
+      requestLike,
+      transaction,
+      inventoryProduct
+    );
+    const catalogContext = await getCatalogContext(db, item.product_barcode_id);
+    const cleanupContext = getCleanupContext(
+      input,
+      requestLike,
+      purchaseContext,
+      catalogContext
+    );
+
+    if (!Number.isFinite(rollbackQty) || rollbackQty <= 0) {
+      warnings.push(`Unable to determine rollback quantity for dispatch item ${item.id}`);
+    }
+
+    if (rollbackQty > Number(item.no_of_units || item.qty || 0)) {
+      warnings.push(
+        `${item.mk_barcode || item.barcode || item.id} has only ${Number(item.no_of_units || item.qty || 0)} dispatch quantity available to rollback.`
+      );
+    }
+
+    if (status === 'received_to_outlet' && !mongoMatch) {
+      warnings.push(`Mongo product not found for ${item.mk_barcode || item.barcode}`);
+    }
+
+    if (mongoStockAfter !== null && mongoStockAfter < 0) {
+      warnings.push(
+        `Mongo stock for ${item.mk_barcode || item.barcode} would become ${mongoStockAfter}.`
+      );
+    }
+
+    if (!transaction) {
+      warnings.push(
+        `Cannot clean migration purchase for dispatch item ${item.id} because no PURCHASE_VERIFIED stock transaction was found.`
+      );
+    }
+
+    affectedProducts.push({
+      request_id: trackingRequest?.id ? Number(trackingRequest.id) : null,
+      dispatch_order_id: Number(dispatchOrderId),
+      dispatch_order_item_id: Number(item.id),
+      dispatch_no_of_units: Number(item.no_of_units || item.qty || 0),
+      inventory_product_id: Number(item.inventory_product_id),
+      product_id: Number(item.catalog_product_id || item.product_id),
+      product_barcode_id: Number(item.product_barcode_id),
+      product_name: item.product_name,
+      warehouse_id: warehouseId ? Number(warehouseId) : null,
+      outlet_id: parseLocationId(order.destination, 'outlet'),
+      transaction_id: transaction?.id ? Number(transaction.id) : null,
+      rollback_quantity: rollbackQty,
+      stock_before: Number(item.inventory_units || 0),
+      stock_after: Number(item.inventory_units || 0),
+      count_in_stock_before: Number(item.inventory_count_in_stock || 0),
+      count_in_stock_after: Number(item.inventory_count_in_stock || 0),
+      mongo_stock_before: mongoStockBefore,
+      mongo_stock_after: mongoStockAfter,
+      mongo_stock_restore_mode: 'subtract_quantity',
+      mongo_previous_state: receiveSnapshot?.previousMongoState || null,
+      purchase_qty_before: null,
+      purchase_qty_after: null,
+      purchase_qty_adjusted: false,
+      purchase: purchaseContext,
+      cleanup: cleanupContext,
+      catalog: catalogContext
+        ? {
+            product_barcode_id: Number(catalogContext.id),
+            product_id: Number(catalogContext.product_id),
+            mk_barcode: catalogContext.mk_barcode,
+            barcode: catalogContext.barcode,
+            product_name: catalogContext.product_name,
+            brand_name: catalogContext.brand_name_english,
+            category_name: catalogContext.category_name_english,
+            unit: catalogContext.unit_short_code,
+            is_active: catalogContext.is_active,
+          }
+        : null,
+      transaction_reference: transaction
+        ? {
+            id: Number(transaction.id),
+            ref_type: transaction.ref_type,
+            source: transaction.source,
+            destination: transaction.destination,
+            qty_in: Number(transaction.qty_in || 0),
+            qty_out: Number(transaction.qty_out || 0),
+            balance_qty: Number(transaction.balance_qty || 0),
+          }
+        : null,
+    });
+  }
+
+  const alreadyRolledBackIds = await getAlreadyRolledBackTransactionIds(
+    db,
+    affectedProducts.map((item) => item.transaction_id)
+  );
+
+  for (const item of affectedProducts) {
+    if (item.transaction_id && alreadyRolledBackIds.has(item.transaction_id)) {
+      warnings.push(
+        `Stock transaction ${item.transaction_id} already has a completed rollback record`
+      );
+    }
+  }
+
+  const canRollback =
+    affectedProducts.length > 0 &&
+    destinationType === 'outlet' &&
+    ['dispatched', 'received_to_outlet'].includes(status) &&
+    affectedProducts.every((item) => item.rollback_quantity > 0) &&
+    affectedProducts.every((item) => item.mongo_stock_after === null || item.mongo_stock_after >= 0) &&
+    affectedProducts.every((item) => Boolean(item.transaction_reference)) &&
+    affectedProducts.every((item) => !item.transaction_id || !alreadyRolledBackIds.has(item.transaction_id));
+
+  return {
+    migration_type: 'outlet_migration',
+    scope: input.scope,
+    request_id: input.request_id,
+    transaction_id: input.transaction_id,
+    dispatch_order_id: Number(dispatchOrderId),
+    affected_rows: affectedProducts.length,
+    affected_tables: [
+      'dispatch.dispatch_order',
+      'dispatch.dispatch_order_items',
+      'inventory.transit_products',
+      'inventory.inventory_products',
+      'inventory.stock_transaction',
+      'mongo.products',
+      'purchases.purchase_order',
+      'catalog.product_barcodes',
+    ],
+    mutated_tables: [
+      'dispatch.dispatch_order',
+      'dispatch.dispatch_order_items',
+      'inventory.transit_products',
+      'inventory.inventory_products',
+      'inventory.stock_transaction',
+      'mongo.products',
+      'purchases.purchase_order',
+      'purchases.purchase_order_items',
+      'catalog.product_barcodes',
+      'request_tracking.requests',
+    ],
+    validation_tables: [
+      'dispatch.dispatch_order_items',
+      'mongo.products',
+      'catalog.product_barcodes',
+      'purchases.purchase_order_items',
+    ],
+    affected_products: affectedProducts,
+    stock_before_after: affectedProducts.map((item) => ({
+      inventory_product_id: item.inventory_product_id,
+      stock_before: item.stock_before,
+      stock_after: item.stock_after,
+      count_in_stock_before: item.count_in_stock_before,
+      count_in_stock_after: item.count_in_stock_after,
+      mongo_stock_before: item.mongo_stock_before,
+      mongo_stock_after: item.mongo_stock_after,
+      mongo_stock_restore_mode: item.mongo_stock_restore_mode,
+      rollback_quantity: item.rollback_quantity,
+    })),
+    transaction_references: affectedProducts
+      .map((item) => item.transaction_reference)
+      .filter(Boolean),
+    warnings,
+    can_rollback: canRollback,
+  };
+};
+
 const buildPreview = async (db, input, { lock = false } = {}) => {
   const selectedRequest = await getRequestById(db, input.request_id, lock);
   const selectedTransaction = await getStockTransactionById(
@@ -706,7 +1333,31 @@ const buildPreview = async (db, input, { lock = false } = {}) => {
   );
 
   if (input.request_id && !selectedRequest) {
-    throw new Error('Inventory migration request not found');
+    throw new Error('Migration request not found');
+  }
+
+  const transactionDispatchOrderId = await getOutletDispatchOrderIdForTransaction(
+    db,
+    selectedTransaction,
+    input
+  );
+
+  if (transactionDispatchOrderId) {
+    return buildOutletMigrationPreview(
+      db,
+      {
+        ...input,
+        dispatch_order_id: transactionDispatchOrderId,
+        product_id: input.product_id || selectedTransaction.product_id,
+        product_barcode_id: input.product_barcode_id || selectedTransaction.product_barcode_id,
+      },
+      selectedRequest,
+      { lock }
+    );
+  }
+
+  if (input.dispatch_order_id || selectedRequest?.request_type === 'inventory_dispatch_to_outlet') {
+    return buildOutletMigrationPreview(db, input, selectedRequest, { lock });
   }
 
   if (input.transaction_id && !selectedTransaction) {
@@ -992,6 +1643,8 @@ const insertRollbackAudit = async (db, input, preview, user) => {
     original_request_ids: requestIds,
     transaction_id: input.transaction_id,
     transaction_ids: transactionIds,
+    dispatch_order_id: input.dispatch_order_id || preview.dispatch_order_id || null,
+    migration_type: preview.migration_type || 'inventory_migration',
     scope: input.scope,
     reason: input.reason,
     affected_products: preview.affected_products,
@@ -1281,6 +1934,340 @@ const cleanupMigrationCreatedRows = async (db, affectedProducts) => {
   };
 };
 
+const rollbackOutletMigration = async (client, input, preview) => {
+  const updatedProducts = [];
+  const rollbackTransactions = [];
+  const mongoUpdates = [];
+  const deletedDispatchRows = {
+    items: [],
+    orders: [],
+    transitProducts: [],
+  };
+  const dispatchOrderIds = toNumberList(
+    ...preview.affected_products.map((item) => item.dispatch_order_id)
+  );
+
+  for (const item of preview.affected_products) {
+    const rollbackQty = Number(item.rollback_quantity || 0);
+
+    if (item.mongo_stock_before !== null) {
+      const mongoMatch = await findMongoFinancial(
+        item.catalog?.mk_barcode || item.catalog?.barcode,
+        item.product_barcode_id
+      );
+
+      if (!mongoMatch) {
+        throw new Error(`Mongo product not found for product barcode ${item.product_barcode_id}`);
+      }
+
+      const currentStock = Number(mongoMatch.financial.countInStock || 0);
+      const previousMongoState =
+        item.mongo_previous_state && typeof item.mongo_previous_state === 'object'
+          ? item.mongo_previous_state
+          : null;
+      const restoreStock = currentStock - rollbackQty;
+
+      if (currentStock < rollbackQty) {
+        throw new Error(
+          `Mongo stock for product barcode ${item.product_barcode_id} is ${currentStock}, cannot remove ${rollbackQty}.`
+        );
+      }
+
+      if (previousMongoState?.financialExisted === false) {
+        const financialId = mongoMatch.financial._id?.toString?.();
+        mongoMatch.detail.financials = (mongoMatch.detail.financials || []).filter(
+          (financial) =>
+            String(financial._id || '') !== String(financialId || '') &&
+            Number(financial.catalogProductBarcodeId) !== Number(item.product_barcode_id)
+        );
+      } else {
+        const previousFinancial =
+          previousMongoState?.financial && typeof previousMongoState.financial === 'object'
+            ? previousMongoState.financial
+            : null;
+
+        if (previousFinancial) {
+          for (const [key, value] of Object.entries(previousFinancial)) {
+            if (key === '_id') continue;
+            if (
+              [
+                'purchasePrice',
+                'purchase_price',
+                'purchaseAmount',
+                'purchase_amount',
+                'mfg_date',
+                'exp_date',
+              ].includes(key)
+            ) {
+              continue;
+            }
+            mongoMatch.financial[key] = value;
+          }
+        }
+
+        mongoMatch.financial.countInStock = restoreStock;
+        delete mongoMatch.financial.purchasePrice;
+        delete mongoMatch.financial.purchase_price;
+        delete mongoMatch.financial.purchaseAmount;
+        delete mongoMatch.financial.purchase_amount;
+        delete mongoMatch.financial.mfg_date;
+        delete mongoMatch.financial.exp_date;
+      }
+
+      if (previousMongoState?.detailImages) {
+        mongoMatch.detail.images = previousMongoState.detailImages;
+      }
+
+      if (previousMongoState?.detailExisted === false) {
+        const detailId = mongoMatch.detail._id?.toString?.();
+        mongoMatch.product.details = (mongoMatch.product.details || []).filter(
+          (detail) => String(detail._id || '') !== String(detailId || '')
+        );
+      }
+
+      if (previousMongoState?.productExisted === false) {
+        await Product.deleteOne({ _id: mongoMatch.product._id });
+      } else {
+        mongoMatch.product.markModified('details');
+        await mongoMatch.product.save();
+      }
+      mongoUpdates.push({
+        product_barcode_id: item.product_barcode_id,
+        mongo_product_id: mongoMatch.product._id?.toString?.(),
+        oldStock: currentStock,
+        removedStock: rollbackQty,
+        restoredFields: Boolean(previousMongoState?.financial || previousMongoState?.detailImages),
+        newStock:
+          previousMongoState?.productExisted === false ||
+          previousMongoState?.financialExisted === false
+            ? null
+            : Number(mongoMatch.financial.countInStock || 0),
+      });
+    }
+
+    const restoredInventoryResult = await client.query(
+      `
+      UPDATE inventory.inventory_products
+      SET
+        no_of_units = COALESCE(no_of_units, 0) + $1,
+        count_in_stock = COALESCE(count_in_stock, 0) + $1,
+        is_active = true,
+        remarks = CONCAT_WS(' | ', NULLIF(remarks, ''), $2::text),
+        updated_at = NOW()
+      WHERE id = $3
+      RETURNING *
+      `,
+      [
+        rollbackQty,
+        input.reason || 'Outlet migration dispatch rollback',
+        Number(item.inventory_product_id),
+      ]
+    );
+
+    const restoredInventory = restoredInventoryResult.rows[0];
+    if (!restoredInventory) {
+      throw new Error(`Inventory product ${item.inventory_product_id} not found for outlet rollback`);
+    }
+
+    const dispatchTxResult = await client.query(
+      `
+      INSERT INTO inventory.stock_transaction (
+        product_id,
+        source,
+        destination,
+        ref_type,
+        qty_in,
+        qty_out,
+        balance_qty
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      RETURNING *
+      `,
+      [
+        Number(item.product_id),
+        `ROLLBACK:DISPATCH_ORDER:${item.dispatch_order_id}`,
+        `WAREHOUSE:${item.warehouse_id || restoredInventory.warehouse_id || 'UNKNOWN'}`,
+        'ROLLBACK_OUTLET_DISPATCH',
+        rollbackQty,
+        0,
+        Number(restoredInventory.count_in_stock || 0),
+      ]
+    );
+    rollbackTransactions.push(dispatchTxResult.rows[0]);
+
+    const dispatchItemUnits = Number(item.dispatch_no_of_units || item.no_of_units || item.rollback_quantity || 0);
+    if (rollbackQty >= dispatchItemUnits) {
+      const deletedItemResult = await client.query(
+        `
+        DELETE FROM dispatch.dispatch_order_items
+        WHERE id = $1
+        RETURNING *
+        `,
+        [Number(item.dispatch_order_item_id)]
+      );
+      deletedDispatchRows.items.push(...deletedItemResult.rows);
+    } else {
+      await client.query(
+        `
+        UPDATE dispatch.dispatch_order_items
+        SET
+          no_of_units = COALESCE(no_of_units, 0) - $1,
+          qty = COALESCE(qty, 0) - $1,
+          notes = CONCAT_WS(' | ', NULLIF(notes, ''), $2::text),
+          updated_at = NOW()
+        WHERE id = $3
+          AND COALESCE(no_of_units, 0) > $1
+          AND COALESCE(qty, 0) > $1
+        `,
+        [
+          rollbackQty,
+          input.reason || 'Outlet migration rollback',
+          Number(item.dispatch_order_item_id),
+        ]
+      );
+    }
+
+    const finalInventoryResult = await client.query(
+      `
+      UPDATE inventory.inventory_products
+      SET
+        no_of_units = COALESCE(no_of_units, 0) - $1,
+        count_in_stock = COALESCE(count_in_stock, 0) - $1,
+        purchase_order_id = CASE
+          WHEN purchase_order_id = $4 THEN NULL
+          ELSE purchase_order_id
+        END,
+        purchase_order_item_id = CASE
+          WHEN purchase_order_item_id = $5 THEN NULL
+          ELSE purchase_order_item_id
+        END,
+        remarks = CONCAT_WS(' | ', NULLIF(remarks, ''), $2::text),
+        updated_at = NOW()
+      WHERE id = $3
+        AND COALESCE(no_of_units, 0) >= $1
+        AND COALESCE(count_in_stock, 0) >= $1
+      RETURNING *
+      `,
+      [
+        rollbackQty,
+        input.reason || 'Outlet migration purchase rollback',
+        Number(item.inventory_product_id),
+        item.purchase?.purchase_order_id
+          ? Number(item.purchase.purchase_order_id)
+          : null,
+        item.purchase?.purchase_order_item_id
+          ? Number(item.purchase.purchase_order_item_id)
+          : null,
+      ]
+    );
+
+    const finalInventory = finalInventoryResult.rows[0];
+    if (!finalInventory) {
+      throw new Error(
+        `Stock changed while rolling back outlet migration inventory product ${item.inventory_product_id}`
+      );
+    }
+
+    updatedProducts.push(finalInventory);
+
+    const purchaseTxResult = await client.query(
+      `
+      INSERT INTO inventory.stock_transaction (
+        product_id,
+        source,
+        destination,
+        ref_type,
+        qty_in,
+        qty_out,
+        balance_qty
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      RETURNING *
+      `,
+      [
+        Number(item.product_id),
+        `WAREHOUSE:${item.warehouse_id || finalInventory.warehouse_id || 'UNKNOWN'}`,
+        `ROLLBACK:OUTLET_MIGRATION:${item.dispatch_order_id}`,
+        'PRODUCT_MIGRATION_ROLLBACK',
+        0,
+        rollbackQty,
+        Number(finalInventory.count_in_stock || 0),
+      ]
+    );
+    rollbackTransactions.push(purchaseTxResult.rows[0]);
+  }
+
+  for (const dispatchOrderId of dispatchOrderIds) {
+    const remainingDispatchResult = await client.query(
+      `
+      SELECT COALESCE(SUM(no_of_units), 0) AS remaining_units
+      FROM dispatch.dispatch_order_items
+      WHERE dispatch_order_id = $1
+      `,
+      [Number(dispatchOrderId)]
+    );
+    const fullyRolledBack = Number(remainingDispatchResult.rows[0]?.remaining_units || 0) <= 0;
+
+    if (fullyRolledBack) {
+      const deletedTransitResult = await client.query(
+        `
+        DELETE FROM inventory.transit_products
+        WHERE dispatch_order_id = $1
+        RETURNING *
+        `,
+        [Number(dispatchOrderId)]
+      );
+      deletedDispatchRows.transitProducts.push(...deletedTransitResult.rows);
+
+      const deletedOrderResult = await client.query(
+        `
+        DELETE FROM dispatch.dispatch_order d
+        WHERE d.id = $1
+          AND NOT EXISTS (
+            SELECT 1
+            FROM dispatch.dispatch_order_items doi
+            WHERE doi.dispatch_order_id = d.id
+          )
+        RETURNING *
+        `,
+        [Number(dispatchOrderId)]
+      );
+      deletedDispatchRows.orders.push(...deletedOrderResult.rows);
+    } else {
+      await client.query(
+        `
+        UPDATE inventory.transit_products
+        SET
+          updated_at = NOW()
+        WHERE dispatch_order_id = $1
+        `,
+        [Number(dispatchOrderId)]
+      );
+
+      await client.query(
+        `
+        UPDATE dispatch.dispatch_order
+        SET
+          dispatch_notes = CONCAT_WS(' | ', NULLIF(dispatch_notes, ''), $2::text),
+          updated_at = NOW()
+        WHERE id = $1
+        `,
+        [
+          Number(dispatchOrderId),
+          input.reason || 'Outlet migration rollback',
+        ]
+      );
+    }
+  }
+
+  return {
+    updatedProducts,
+    rollbackTransactions,
+    mongoUpdates,
+    deletedDispatchRows,
+  };
+};
+
 export const ProductMigrationRollback = {
   async preview(data = {}) {
     const input = normalizeInput(data);
@@ -1308,6 +2295,44 @@ export const ProductMigrationRollback = {
 
       const updatedProducts = [];
       const rollbackTransactions = [];
+
+      if (preview.migration_type === 'outlet_migration') {
+        const outletRollback = await rollbackOutletMigration(client, input, preview);
+        const cleanup = await cleanupMigrationCreatedRows(
+          client,
+          preview.affected_products
+        );
+
+        const auditRequest = await insertRollbackAudit(
+          client,
+          input,
+          {
+            ...preview,
+            cleanup,
+          },
+          user
+        );
+
+        await client.query('COMMIT');
+
+        return {
+          message: 'Outlet migration rollback completed',
+          rollback: {
+            migration_type: preview.migration_type,
+            scope: input.scope,
+            reason: input.reason,
+            affected_rows: preview.affected_rows,
+            affected_products: preview.affected_products,
+            warnings: preview.warnings,
+          },
+          inventoryProducts: outletRollback.updatedProducts,
+          mongoUpdates: outletRollback.mongoUpdates,
+          deletedDispatchRows: outletRollback.deletedDispatchRows,
+          cleanup,
+          stockTransactions: outletRollback.rollbackTransactions,
+          requestTracking: auditRequest,
+        };
+      }
 
       for (const item of preview.affected_products) {
         const productResult = await client.query(

@@ -29,6 +29,17 @@ const hasBarcode = (financial, code) =>
     .filter(Boolean)
     .some((item) => String(item) === String(code));
 
+const clonePlain = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  return JSON.parse(JSON.stringify(value));
+};
+
+const sameMongoId = (left, right) => {
+  if (!left || !right) return false;
+  return String(left) === String(right);
+};
+
 const isInternalPackingDestination = (destination) => {
   const normalized = String(destination || '')
     .trim()
@@ -1761,8 +1772,8 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         u.unit_name,
         ip.unit_price AS inventory_unit_price,
         ip.unit_mrp AS inventory_unit_mrp,
-        poi.expected_unit_price,
-        poi.actual_unit_price
+        COALESCE(poi.actual_unit_price, ip_poi.actual_unit_price) AS actual_unit_price,
+        COALESCE(poi.expected_unit_price, ip_poi.expected_unit_price) AS expected_unit_price
       FROM dispatch.dispatch_order_items doi
       JOIN catalog.product_barcodes pb ON pb.id = doi.product_barcode_id
       LEFT JOIN catalog.products p ON p.id = pb.product_id
@@ -1777,6 +1788,8 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
        AND poi.brand_id IS NOT DISTINCT FROM doi.brand_id
        AND poi.category_id IS NOT DISTINCT FROM doi.category_id
        AND poi.unit_id IS NOT DISTINCT FROM doi.unit_id
+      LEFT JOIN purchases.purchase_order_items ip_poi
+        ON ip_poi.id = ip.purchase_order_item_id
       WHERE doi.dispatch_order_id = $1
       `,
       [dispatchOrderId, dispatchOrder.purchase_order_id]
@@ -1793,7 +1806,25 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
     const bodyItems = Array.isArray(req.body?.items) ? req.body.items : [];
 
     for (const item of items) {
-      const barcodes = [...new Set([item.mk_barcode, item.barcode].filter(Boolean).map(String))];
+      const bodyItem =
+        bodyItems.find((receivedItem) =>
+          Number(receivedItem.dispatch_order_item_id) === Number(item.id) ||
+          Number(receivedItem.product_barcode_id) === Number(item.catalog_product_barcode_id) ||
+          String(receivedItem.MK_BARCODE || receivedItem.mk_barcode || receivedItem.barcode || '') ===
+            String(item.mk_barcode || item.barcode || '')
+        ) ||
+        (items.length === 1 && bodyItems.length === 1 ? bodyItems[0] : null);
+      const effectiveMkBarcode =
+        bodyItem?.MK_BARCODE || bodyItem?.mk_barcode || item.mk_barcode || item.barcode;
+      const effectiveVendorBarcode =
+        bodyItem?.vendor_barcode || bodyItem?.barcode || item.barcode || item.mk_barcode;
+      const barcodes = [
+        ...new Set(
+          [effectiveVendorBarcode, effectiveMkBarcode, item.barcode, item.mk_barcode]
+            .filter(Boolean)
+            .map(String)
+        ),
+      ];
 
       if (!barcodes.length) {
         res.status(400);
@@ -1801,30 +1832,37 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       }
 
       const qtyToAdd = Number(item.no_of_units ?? item.qty ?? 0);
-      const bodyItem = bodyItems.find((receivedItem) =>
-        Number(receivedItem.dispatch_order_item_id) === Number(item.id) ||
-        Number(receivedItem.product_barcode_id) === Number(item.catalog_product_barcode_id) ||
-        String(receivedItem.MK_BARCODE || receivedItem.mk_barcode || receivedItem.barcode || '') ===
-          String(item.mk_barcode || item.barcode || '')
-      );
       const imageUrl = bodyItem?.image_url || bodyItem?.imageUrl || item.image_url || null;
       const packagePrice = Number(
-        item.inventory_unit_price ??
+        bodyItem?.selling_price ??
+          bodyItem?.sellingPrice ??
+          bodyItem?.salePrice ??
           bodyItem?.dprice ??
           bodyItem?.package_amount ??
+          item.inventory_unit_price ??
           item.actual_unit_price ??
           item.expected_unit_price ??
           0
       );
       const mrpPrice = Number(
-        item.inventory_unit_mrp ??
-          bodyItem?.unit_mrp ??
+        bodyItem?.unit_mrp ??
           bodyItem?.unit_MRP ??
           bodyItem?.price ??
           bodyItem?.mrp_amount ??
+          item.inventory_unit_mrp ??
           (packagePrice > 0 ? Math.round(packagePrice * 1.25) : 0)
       );
-      const discount = Number(item.discount ?? item.Discount ?? 0);
+      const discount = Number(
+        bodyItem?.discount ?? bodyItem?.Discount ?? item.discount ?? item.Discount ?? 0
+      );
+      const stockValueInput =
+        bodyItem?.countInStock ??
+        bodyItem?.count_in_stock ??
+        bodyItem?.newQuantity ??
+        bodyItem?.stock_quantity ??
+        bodyItem?.target_stock;
+      const stockValue = Number(stockValueInput);
+      const targetStock = Number.isFinite(stockValue) ? stockValue : qtyToAdd;
       const sellingPrice = packagePrice;
       const unitPrice = mrpPrice;
 
@@ -1834,13 +1872,14 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       }
 
       let product =
-        (await Product.findOne({ catalogProductId: Number(item.product_id) })) ||
+        (bodyItem?.mongo_product_id ? await Product.findById(bodyItem.mongo_product_id) : null) ||
+        (await Product.findOne({ 'details.financials.barcode': { $in: barcodes } })) ||
+        (await Product.findOne({ 'details.financials.MK_BARCODE': { $in: barcodes } })) ||
+        (await Product.findOne({ 'details.financials.mkBarcode': { $in: barcodes } })) ||
         (await Product.findOne({
           'details.financials.catalogProductBarcodeId': Number(item.catalog_product_barcode_id),
         })) ||
-        (await Product.findOne({ 'details.financials.MK_BARCODE': { $in: barcodes } })) ||
-        (await Product.findOne({ 'details.financials.mkBarcode': { $in: barcodes } })) ||
-        (await Product.findOne({ 'details.financials.barcode': { $in: barcodes } }));
+        (await Product.findOne({ catalogProductId: Number(item.product_id) }));
 
       if (!product) {
         const productName =
@@ -1862,20 +1901,35 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         });
       }
 
-      if (!product.mongoCategoryId) {
+      const isNewProduct = product.isNew;
+
+      if (isNewProduct && !product.mongoCategoryId) {
         product.mongoCategoryId = new mongoose.Types.ObjectId().toString();
       }
 
-      if (item.category_id && !product.catalogCategoryId) {
+      if (isNewProduct && item.category_id && !product.catalogCategoryId) {
         product.catalogCategoryId = Number(item.category_id);
       }
 
-      let detail = (product.details || []).find(
-        (productDetail) =>
-          Number(productDetail.catalogBrandId) === Number(item.brand_id) ||
-          String(productDetail.brand || '').toLowerCase() ===
-            String(item.brand_name_english || '').toLowerCase()
-      );
+      let detail =
+        (product.details || []).find((productDetail) =>
+          sameMongoId(productDetail._id, bodyItem?.mongo_detail_id)
+        ) ||
+        (product.details || []).find((productDetail) =>
+          (productDetail.financials || []).some(
+            (itemFinancial) =>
+              hasBarcode(itemFinancial, effectiveVendorBarcode) ||
+              hasBarcode(itemFinancial, effectiveMkBarcode)
+          )
+        ) ||
+        (product.details || []).find(
+          (productDetail) =>
+            Number(productDetail.catalogBrandId) === Number(item.brand_id) ||
+            String(productDetail.brand || '').toLowerCase() ===
+              String(item.brand_name_english || '').toLowerCase()
+        );
+      const detailExisted = Boolean(detail);
+      const oldDetailImages = detail ? clonePlain(detail.images || []) : null;
 
       if (!detail) {
         product.details.push({
@@ -1887,46 +1941,103 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
           financials: [],
         });
         detail = product.details[product.details.length - 1];
-      } else if (imageUrl && !(detail.images || []).some((image) => image.image === imageUrl)) {
-        detail.images = [...(detail.images || []), { image: imageUrl }];
+      } else if (imageUrl) {
+        if (detail.images?.length) {
+          detail.images[0].image = imageUrl;
+          detail.images = [detail.images[0]];
+        } else {
+          detail.images = [{ image: imageUrl }];
+        }
       }
 
-      let financial = (detail.financials || []).find(
-        (itemFinancial) =>
-          Number(itemFinancial.catalogProductBarcodeId) ===
-            Number(item.catalog_product_barcode_id) ||
-          hasBarcode(itemFinancial, item.mk_barcode) ||
-          hasBarcode(itemFinancial, item.barcode)
-      );
+      let financial =
+        (detail.financials || []).find((itemFinancial) =>
+          sameMongoId(itemFinancial._id, bodyItem?.mongo_financial_id)
+        ) ||
+        (detail.financials || []).find(
+          (itemFinancial) =>
+            hasBarcode(itemFinancial, effectiveVendorBarcode) ||
+            hasBarcode(itemFinancial, effectiveMkBarcode) ||
+            hasBarcode(itemFinancial, item.mk_barcode) ||
+            hasBarcode(itemFinancial, item.barcode) ||
+            Number(itemFinancial.catalogProductBarcodeId) ===
+              Number(item.catalog_product_barcode_id)
+        );
 
       const oldStock = financial ? Number(financial.countInStock || 0) : 0;
+      const financialExisted = Boolean(financial);
+      const oldFinancialState = financial ? clonePlain(financial) : null;
 
       if (financial) {
-        financial.countInStock = oldStock + qtyToAdd;
+        financial.countInStock = oldStock + targetStock;
         financial.price = unitPrice;
         financial.dprice = sellingPrice;
         financial.Discount = discount;
-        financial.MK_BARCODE = item.mk_barcode || financial.MK_BARCODE || item.barcode;
-        financial.mkBarcode = item.mk_barcode || financial.mkBarcode || item.barcode;
+        financial.catalogProductBarcodeId = Number(item.catalog_product_barcode_id);
+        financial.mkid = Number(item.catalog_product_barcode_id);
+        financial.quantity = Number(item.barcode_quantity || item.qty || financial.quantity || 0);
+        financial.units = item.unit_short_code || item.unit_name || financial.units || 'unit';
+        financial.MK_BARCODE = effectiveMkBarcode || financial.MK_BARCODE || effectiveVendorBarcode;
+        financial.mkBarcode = effectiveMkBarcode || financial.mkBarcode || effectiveVendorBarcode;
+        financial.barcode = barcodes;
       } else {
         detail.financials.push({
           _id: new mongoose.Types.ObjectId(),
           catalogProductBarcodeId: Number(item.catalog_product_barcode_id),
           mkid: Number(item.catalog_product_barcode_id),
-          MK_BARCODE: item.mk_barcode || item.barcode,
-          mkBarcode: item.mk_barcode || item.barcode,
+          MK_BARCODE: effectiveMkBarcode || effectiveVendorBarcode,
+          mkBarcode: effectiveMkBarcode || effectiveVendorBarcode,
           price: unitPrice,
           dprice: sellingPrice,
           Discount: discount,
           quantity: Number(item.barcode_quantity || item.qty || 0),
-          countInStock: qtyToAdd,
+          countInStock: targetStock,
           units: item.unit_short_code || item.unit_name || 'unit',
           barcode: barcodes,
         });
         financial = detail.financials[detail.financials.length - 1];
       }
 
+      product.markModified('details');
       await product.save();
+      const forcedMongoSet = {
+        'details.$[detail].financials.$[financial].catalogProductBarcodeId': Number(item.catalog_product_barcode_id),
+        'details.$[detail].financials.$[financial].mkid': Number(item.catalog_product_barcode_id),
+        'details.$[detail].financials.$[financial].price': unitPrice,
+        'details.$[detail].financials.$[financial].dprice': sellingPrice,
+        'details.$[detail].financials.$[financial].Discount': discount,
+        'details.$[detail].financials.$[financial].quantity': Number(item.barcode_quantity || item.qty || 0),
+        'details.$[detail].financials.$[financial].countInStock': Number(financial.countInStock || 0),
+        'details.$[detail].financials.$[financial].units': item.unit_short_code || item.unit_name || 'unit',
+        'details.$[detail].financials.$[financial].barcode': barcodes,
+        'details.$[detail].financials.$[financial].MK_BARCODE': effectiveMkBarcode || effectiveVendorBarcode,
+        'details.$[detail].financials.$[financial].mkBarcode': effectiveMkBarcode || effectiveVendorBarcode,
+      };
+      const forcedMongoUnset = {
+        'details.$[detail].financials.$[financial].purchasePrice': '',
+        'details.$[detail].financials.$[financial].purchase_price': '',
+        'details.$[detail].financials.$[financial].purchaseAmount': '',
+        'details.$[detail].financials.$[financial].purchase_amount': '',
+        'details.$[detail].financials.$[financial].mfg_date': '',
+        'details.$[detail].financials.$[financial].exp_date': '',
+      };
+
+      if (imageUrl) {
+        const firstImage = clonePlain(detail.images?.[0] || { image: imageUrl });
+        firstImage.image = imageUrl;
+        forcedMongoSet['details.$[detail].images'] = [firstImage];
+      }
+
+      await Product.updateOne(
+        { _id: product._id },
+        { $set: forcedMongoSet, $unset: forcedMongoUnset },
+        {
+          arrayFilters: [
+            { 'detail._id': detail._id },
+            { 'financial._id': financial._id },
+          ],
+        }
+      );
       await syncBarcodeMongoIds(client, { ...item, image_url: imageUrl }, product, detail, financial);
 
       updatedProducts.push({
@@ -1937,8 +2048,16 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         financialId: financial._id,
         barcode: barcodes,
         oldStock,
-        addedQty: qtyToAdd,
+        receivedQty: qtyToAdd,
+        addedStock: targetStock,
         newStock: Number(financial.countInStock || 0),
+        previousMongoState: {
+          productExisted: !isNewProduct,
+          detailExisted,
+          detailImages: oldDetailImages,
+          financialExisted,
+          financial: oldFinancialState,
+        },
       });
     }
 
@@ -1968,6 +2087,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
     await RequestTracking.upsertDispatchReceiveRequest(updatedOrderResult.rows[0], {
       db: client,
       requestedBy: RequestTracking.actorName(req.user || {}),
+      receiveResult: { updatedProducts },
     });
 
     await client.query('COMMIT');

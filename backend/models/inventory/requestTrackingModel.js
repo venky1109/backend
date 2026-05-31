@@ -90,9 +90,13 @@ const buildDispatchReceivePayload = async (db, dispatchOrder) => {
     `
     SELECT
       doi.product_id,
+      doi.product_barcode_id,
+      doi.inventory_product_id,
       doi.brand_id,
       doi.category_id,
       doi.unit_id,
+      pb.mk_barcode,
+      COALESCE(pb.barcode, pb.mk_barcode) AS barcode,
       COALESCE(doi.no_of_units, doi.qty, 0) AS quantity,
       COALESCE(p.product_name_eng, p.product_name_tel, p.product_code, doi.product_id::text) AS product_name,
       COALESCE(b.brand_name_english, b.brand_name_telugu, doi.brand_id::text) AS brand_name,
@@ -101,6 +105,7 @@ const buildDispatchReceivePayload = async (db, dispatchOrder) => {
       COALESCE(poi.actual_unit_price, poi.expected_unit_price, ip.unit_price, 0) AS unit_price,
       COALESCE(ip.unit_mrp, 0) AS unit_mrp
     FROM dispatch.dispatch_order_items doi
+    LEFT JOIN catalog.product_barcodes pb ON pb.id = doi.product_barcode_id
     LEFT JOIN catalog.products p ON p.id = doi.product_id
     LEFT JOIN catalog.brands b ON b.id = doi.brand_id
     LEFT JOIN catalog.categories c ON c.id = doi.category_id
@@ -132,6 +137,11 @@ const buildDispatchReceivePayload = async (db, dispatchOrder) => {
 
     return {
       product_name: item.product_name || '',
+      product_id: item.product_id ? Number(item.product_id) : null,
+      product_barcode_id: item.product_barcode_id ? Number(item.product_barcode_id) : null,
+      inventory_product_id: item.inventory_product_id ? Number(item.inventory_product_id) : null,
+      mk_barcode: item.mk_barcode || '',
+      barcode: item.barcode || item.mk_barcode || '',
       brand_name: item.brand_name || '',
       category_name: item.category_name || '',
       quantity,
@@ -482,7 +492,7 @@ export const RequestTracking = {
     return rows[0] || null;
   },
 
-  async upsertDispatchReceiveRequest(dispatchOrder, { db, requestedBy } = {}) {
+  async upsertDispatchReceiveRequest(dispatchOrder, { db, requestedBy, receiveResult } = {}) {
     const dispatchOrderId = Number(dispatchOrder?.id);
     if (!dispatchOrderId) return null;
 
@@ -613,7 +623,10 @@ export const RequestTracking = {
           status === 'completed'
             ? 'Dispatch received to outlet'
             : 'Dispatch awaiting outlet receive',
-          JSON.stringify({ dispatch_order_id: dispatchOrderId }),
+          JSON.stringify({
+            dispatch_order_id: dispatchOrderId,
+            ...(receiveResult && typeof receiveResult === 'object' ? receiveResult : {}),
+          }),
           requestedBy || null,
         ]
       );
