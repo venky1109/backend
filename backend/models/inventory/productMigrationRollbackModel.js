@@ -1121,8 +1121,18 @@ const buildOutletMigrationPreview = async (db, input, selectedRequest, { lock = 
       receiveStockSnapshots.get(String(item.mk_barcode || '')) ||
       receiveStockSnapshots.get(String(item.barcode || '')) ||
       null;
+    const previousMongoState =
+      receiveSnapshot?.previousMongoState && typeof receiveSnapshot.previousMongoState === 'object'
+        ? receiveSnapshot.previousMongoState
+        : null;
     const mongoStockAfter =
-      mongoStockBefore === null ? null : mongoStockBefore - rollbackQty;
+      mongoStockBefore === null
+        ? null
+        : previousMongoState?.financialExisted === false
+          ? 0
+          : previousMongoState?.financial?.countInStock !== undefined
+            ? Number(previousMongoState.financial.countInStock || 0)
+            : mongoStockBefore - rollbackQty;
     const warehouseId =
       parseLocationId(order.source, 'warehouse') ||
       item.inventory_warehouse_id ||
@@ -1214,8 +1224,8 @@ const buildOutletMigrationPreview = async (db, input, selectedRequest, { lock = 
       count_in_stock_after: Number(item.inventory_count_in_stock || 0),
       mongo_stock_before: mongoStockBefore,
       mongo_stock_after: mongoStockAfter,
-      mongo_stock_restore_mode: 'subtract_quantity',
-      mongo_previous_state: receiveSnapshot?.previousMongoState || null,
+      mongo_stock_restore_mode: previousMongoState ? 'restore_previous_state' : 'subtract_quantity',
+      mongo_previous_state: previousMongoState,
       purchase_qty_before: null,
       purchase_qty_after: null,
       purchase_qty_adjusted: false,
@@ -1965,9 +1975,18 @@ const rollbackOutletMigration = async (client, input, preview) => {
         item.mongo_previous_state && typeof item.mongo_previous_state === 'object'
           ? item.mongo_previous_state
           : null;
-      const restoreStock = currentStock - rollbackQty;
+      const previousFinancial =
+        previousMongoState?.financial && typeof previousMongoState.financial === 'object'
+          ? previousMongoState.financial
+          : null;
+      const restoreStock =
+        previousMongoState?.financialExisted === false
+          ? 0
+          : previousFinancial?.countInStock !== undefined
+            ? Number(previousFinancial.countInStock || 0)
+            : currentStock - rollbackQty;
 
-      if (currentStock < rollbackQty) {
+      if (!previousMongoState && currentStock < rollbackQty) {
         throw new Error(
           `Mongo stock for product barcode ${item.product_barcode_id} is ${currentStock}, cannot remove ${rollbackQty}.`
         );
@@ -1981,11 +2000,6 @@ const rollbackOutletMigration = async (client, input, preview) => {
             Number(financial.catalogProductBarcodeId) !== Number(item.product_barcode_id)
         );
       } else {
-        const previousFinancial =
-          previousMongoState?.financial && typeof previousMongoState.financial === 'object'
-            ? previousMongoState.financial
-            : null;
-
         if (previousFinancial) {
           for (const [key, value] of Object.entries(previousFinancial)) {
             if (key === '_id') continue;

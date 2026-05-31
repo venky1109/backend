@@ -1967,12 +1967,15 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       const oldStock = financial ? Number(financial.countInStock || 0) : 0;
       const financialExisted = Boolean(financial);
       const oldFinancialState = financial ? clonePlain(financial) : null;
+      const migrationTimestamp = new Date();
 
       if (financial) {
-        financial.countInStock = oldStock + targetStock;
+        financial.countInStock = targetStock;
         financial.price = unitPrice;
         financial.dprice = sellingPrice;
         financial.Discount = discount;
+        financial.createdAt = financial.createdAt || migrationTimestamp;
+        financial.updatedAt = migrationTimestamp;
         financial.catalogProductBarcodeId = Number(item.catalog_product_barcode_id);
         financial.mkid = Number(item.catalog_product_barcode_id);
         financial.quantity = Number(item.barcode_quantity || item.qty || financial.quantity || 0);
@@ -1992,6 +1995,8 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
           Discount: discount,
           quantity: Number(item.barcode_quantity || item.qty || 0),
           countInStock: targetStock,
+          createdAt: migrationTimestamp,
+          updatedAt: migrationTimestamp,
           units: item.unit_short_code || item.unit_name || 'unit',
           barcode: barcodes,
         });
@@ -2008,11 +2013,16 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         'details.$[detail].financials.$[financial].Discount': discount,
         'details.$[detail].financials.$[financial].quantity': Number(item.barcode_quantity || item.qty || 0),
         'details.$[detail].financials.$[financial].countInStock': Number(financial.countInStock || 0),
+        'details.$[detail].financials.$[financial].updatedAt': migrationTimestamp,
         'details.$[detail].financials.$[financial].units': item.unit_short_code || item.unit_name || 'unit',
         'details.$[detail].financials.$[financial].barcode': barcodes,
         'details.$[detail].financials.$[financial].MK_BARCODE': effectiveMkBarcode || effectiveVendorBarcode,
         'details.$[detail].financials.$[financial].mkBarcode': effectiveMkBarcode || effectiveVendorBarcode,
       };
+      if (!oldFinancialState?.createdAt) {
+        forcedMongoSet['details.$[detail].financials.$[financial].createdAt'] =
+          financial.createdAt || migrationTimestamp;
+      }
       const forcedMongoUnset = {
         'details.$[detail].financials.$[financial].purchasePrice': '',
         'details.$[detail].financials.$[financial].purchase_price': '',
@@ -2049,7 +2059,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         barcode: barcodes,
         oldStock,
         receivedQty: qtyToAdd,
-        addedStock: targetStock,
+        updatedStock: targetStock,
         newStock: Number(financial.countInStock || 0),
         previousMongoState: {
           productExisted: !isNewProduct,
