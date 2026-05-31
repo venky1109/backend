@@ -70,6 +70,21 @@ const resolvePOSOrderDiscountPercentage = (req, res, fallbackDiscountPercentage 
   return Math.min(Number(requestedDiscount.toFixed(2)), MAX_POS_ORDER_DISCOUNT_PERCENTAGE);
 };
 
+const resolveOrderStepStatus = (body, ...keys) => {
+  for (const key of keys) {
+    if (body[key] === undefined || body[key] === null) continue;
+    if (typeof body[key] === 'boolean') return body[key];
+    if (typeof body[key] === 'string') {
+      const value = body[key].trim().toLowerCase();
+      if (['true', 'yes', '1'].includes(value)) return true;
+      if (['false', 'no', '0'].includes(value)) return false;
+    }
+    return Boolean(body[key]);
+  }
+
+  return false;
+};
+
 const formatRemarkDate = (date = new Date()) =>
   new Intl.DateTimeFormat('en-IN', {
     day: '2-digit',
@@ -349,6 +364,10 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
     dbOrderItems,
     discountPercentage
   );
+  const isPacked = resolveOrderStepStatus(req.body, 'isPacked', 'packed');
+  const isDispatched = resolveOrderStepStatus(req.body, 'isDispatched', 'dispatched');
+  const isDelivered = resolveOrderStepStatus(req.body, 'isDelivered', 'delivered');
+  const now = Date.now();
   const source = 'CASHIER';
 const normalizedPaymentMethod = String(paymentMethod || '').toUpperCase();
 
@@ -378,6 +397,12 @@ const isPaid =
       source,
       isPaid,
       paidAt: isPaid ? Date.now() : null,
+      isPacked,
+      isDispatched,
+      isDelivered,
+      packedAt: isPacked ? now : null,
+      dispatchedAt: isDispatched ? now : null,
+      deliveredAt: isDelivered ? now : null,
       posUserName: resolvedPosUserName,
       posLocation: resolvedPosLocation,
       remarks: remarks
