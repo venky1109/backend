@@ -423,8 +423,7 @@ export const getCanvaProductFinancials = async (req, res, next) => {
             { englishname: { $regex: q, $options: 'i' } },
             { category: { $regex: q, $options: 'i' } },
             { 'details.brand': { $regex: q, $options: 'i' } },
-            { 'details.financials.MK_BARCODE': { $regex: q, $options: 'i' } },
-            { 'details.financials.mkBarcode': { $regex: q, $options: 'i' } },
+            { 'details.financials.mk_barcode': { $regex: q, $options: 'i' } },
             { 'details.financials.barcode': { $regex: q, $options: 'i' } },
           ],
         }
@@ -444,8 +443,7 @@ export const getCanvaProductFinancials = async (req, res, next) => {
           const barcode =
             financial.catalogProductBarcodeId ||
             financial.mkid ||
-            financial.MK_BARCODE ||
-            financial.mkBarcode ||
+            financial.mk_barcode ||
             (Array.isArray(financial.barcode) ? financial.barcode[0] : financial.barcode) ||
             '';
 

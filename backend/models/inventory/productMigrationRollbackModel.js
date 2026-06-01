@@ -127,7 +127,7 @@ const normalizeInput = (data = {}) => {
     inventory_product_id: toNumber(
       data.inventory_product_id ?? data.inventoryProductId
     ),
-    mk_barcode: data.mk_barcode ?? data.mkBarcode ?? null,
+    mk_barcode: data.mk_barcode ?? null,
     outlet_id: data.outlet_id ?? data.outletId ?? null,
     warehouse_id: toNumber(data.warehouse_id ?? data.warehouseId),
     quantity:
@@ -752,9 +752,7 @@ const addRollbackBlockingWarnings = (
 const hasFinancialBarcode = (financial, codes = []) => {
   const barcodes = codes.map(String);
   return (
-    barcodes.includes(String(financial?.MK_BARCODE || '')) ||
-    barcodes.includes(String(financial?.mkBarcode || '')) ||
-    toBarcodeArray(financial?.barcode).some((barcode) => barcodes.includes(barcode))
+    barcodes.includes(String(financial?.mk_barcode || ''))
   );
 };
 
@@ -769,13 +767,7 @@ const findMongoFinancial = async (mkBarcode, catalogProductBarcodeId = null) => 
         })
       : null) ||
     (barcodes.length
-      ? await Product.findOne({ 'details.financials.MK_BARCODE': { $in: barcodes } })
-      : null) ||
-    (barcodes.length
-      ? await Product.findOne({ 'details.financials.mkBarcode': { $in: barcodes } })
-      : null) ||
-    (barcodes.length
-      ? await Product.findOne({ 'details.financials.barcode': { $in: barcodes } })
+      ? await Product.findOne({ 'details.financials.mk_barcode': { $in: barcodes } })
       : null);
 
   if (!product) return null;

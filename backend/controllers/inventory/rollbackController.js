@@ -23,7 +23,7 @@ const findRequestedItem = (row, requestedItems = []) =>
     const requestedInventoryId = item.inventory_product_id ?? item.inventoryProductId;
     const requestedDispatchItemId = item.dispatch_order_item_id ?? item.dispatchOrderItemId;
     const requestedBarcodeId = item.product_barcode_id ?? item.productBarcodeId;
-    const requestedMkBarcode = item.MK_BARCODE || item.mk_barcode || item.mkBarcode || item.barcode;
+    const requestedMkBarcode = item.mk_barcode || item.barcode;
 
   return (
       (requestedInventoryId &&
@@ -61,13 +61,7 @@ const findFinancialByMkBarcode = async (mkBarcode, catalogProductBarcodeId = nul
         })
       : null) ||
     (barcodes.length
-      ? await Product.findOne({ 'details.financials.MK_BARCODE': { $in: barcodes } })
-      : null) ||
-    (barcodes.length
-      ? await Product.findOne({ 'details.financials.mkBarcode': { $in: barcodes } })
-      : null) ||
-    (barcodes.length
-      ? await Product.findOne({ 'details.financials.barcode': { $in: barcodes } })
+      ? await Product.findOne({ 'details.financials.mk_barcode': { $in: barcodes } })
       : null);
 
   if (!product) return null;
@@ -76,9 +70,7 @@ const findFinancialByMkBarcode = async (mkBarcode, catalogProductBarcodeId = nul
     const financial = (detail.financials || []).find(
       (item) =>
         Number(item.catalogProductBarcodeId) === Number(catalogProductBarcodeId) ||
-        barcodes.includes(String(item.MK_BARCODE || '')) ||
-        barcodes.includes(String(item.mkBarcode || '')) ||
-        toBarcodeArray(item.barcode).some((barcode) => barcodes.includes(barcode))
+        barcodes.includes(String(item.mk_barcode || ''))
     );
 
     if (financial) return { product, detail, financial };
@@ -427,13 +419,13 @@ export const rollbackDispatch = asyncHandler(async (req, res) => {
         );
 
         if (!match) {
-          throw new Error(`Mongo product not found for MK_BARCODE ${item.mk_barcode || item.barcode}`);
+          throw new Error(`Mongo product not found for mk_barcode ${item.mk_barcode || item.barcode}`);
         }
 
         const currentStock = toNumber(match.financial.countInStock);
         if (currentStock < rollbackUnits) {
           throw new Error(
-            `Mongo stock for MK_BARCODE ${item.mk_barcode || item.barcode} is ${currentStock}, cannot remove ${rollbackUnits}.`
+            `Mongo stock for mk_barcode ${item.mk_barcode || item.barcode} is ${currentStock}, cannot remove ${rollbackUnits}.`
           );
         }
 

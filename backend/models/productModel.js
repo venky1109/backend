@@ -4,9 +4,9 @@ import slugify from 'slugify';
 // Define a schema for the financial details
 const financialSchema = new mongoose.Schema({
   catalogProductBarcodeId: { type: Number, index: true },
+  product_barcode_id: { type: Number, index: true },
   mkid: { type: Number, index: true },
-  MK_BARCODE: { type: String, index: true },
-  mkBarcode: { type: String, index: true },
+  mk_barcode: { type: String, index: true },
   price: { type: Number, required: true },
   dprice: { type: Number, required: true },
   Discount: { type: Number, required: true },

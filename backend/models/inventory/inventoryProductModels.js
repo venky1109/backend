@@ -238,14 +238,14 @@ export const InventoryProduct = {
     const finalMfgDate = toPgDate(mfg_date);
 
     let resolvedProductBarcodeId = product_barcode_id;
-    const mkBarcode = data.MK_BARCODE || data.mk_barcode || data.mkBarcode || data.barcode;
+    const mkBarcode = data.mk_barcode || data.barcode;
 
     if (!resolvedProductBarcodeId && mkBarcode) {
       const barcodeLookup = await query(
         `
         SELECT id
         FROM catalog.product_barcodes
-        WHERE mk_barcode = $1 OR barcode = $1
+        WHERE mk_barcode = $1
         LIMIT 1
         `,
         [String(mkBarcode)]
@@ -254,7 +254,7 @@ export const InventoryProduct = {
     }
 
     if (!purchase_order_id) throw new Error('purchase_order_id is required');
-    if (!resolvedProductBarcodeId) throw new Error('product_barcode_id or MK_BARCODE is required');
+    if (!resolvedProductBarcodeId) throw new Error('product_barcode_id or mk_barcode is required');
     if (!batch_id) throw new Error('batch_id is required');
     if (!warehouse_id) throw new Error('warehouse_id is required');
     if (!finalExpDate) throw new Error('Valid exp_date is required');

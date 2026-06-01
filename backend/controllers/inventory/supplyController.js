@@ -20,8 +20,7 @@ const getItemQuantity = (item) => Number(item.qty ?? item.quantity ?? 0);
 
 const getCatalogBarcodeForPurchaseItem = async (client, item) => {
   const barcodeId = item.product_barcode_id ?? item.productBarcodeId;
-  const mkBarcode =
-    item.MK_BARCODE ?? item.mk_barcode ?? item.mkBarcode ?? item.barcode ?? null;
+  const mkBarcode = item.mk_barcode ?? item.barcode ?? null;
   const params = [];
   let where = '';
 
@@ -30,7 +29,7 @@ const getCatalogBarcodeForPurchaseItem = async (client, item) => {
     where = 'pb.id = $1';
   } else if (mkBarcode) {
     params.push(String(mkBarcode));
-    where = '(pb.mk_barcode = $1 OR pb.barcode = $1)';
+    where = 'pb.mk_barcode = $1';
   } else {
     params.push(
       Number(item.product_id),

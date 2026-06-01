@@ -23,8 +23,7 @@ const toBarcodeArray = (barcode) => {
 const hasBarcode = (financial, code) =>
   [
     ...toBarcodeArray(financial?.barcode),
-    financial?.MK_BARCODE,
-    financial?.mkBarcode,
+    financial?.mk_barcode,
   ]
     .filter(Boolean)
     .some((item) => String(item) === String(code));
@@ -39,6 +38,49 @@ const sameMongoId = (left, right) => {
   if (!left || !right) return false;
   return String(left) === String(right);
 };
+
+const normalizeMigrationText = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+
+const sameMigrationText = (left, right) => {
+  const normalizedLeft = normalizeMigrationText(left);
+  const normalizedRight = normalizeMigrationText(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+};
+
+const mongoProductMatchesCatalogItem = (product, item) => {
+  if (!product || !item) return false;
+  if (Number(product.catalogProductId) === Number(item.product_id)) return true;
+
+  const catalogProductName = item.product_name_eng || item.product_name_tel || '';
+  return [product.name, product.productname, product.englishname].some((name) =>
+    sameMigrationText(name, catalogProductName)
+  );
+};
+
+const mongoFinancialMatchesCatalogBarcode = (financial, item, mkBarcode) =>
+  String(financial?.mk_barcode || '') === String(mkBarcode || '') ||
+  Number(financial?.product_barcode_id) === Number(item?.catalog_product_barcode_id) ||
+  Number(financial?.catalogProductBarcodeId) === Number(item?.catalog_product_barcode_id);
+
+const padMigrationBarcodePart = (value, size) => String(value || '').padStart(size, '0');
+
+const makeMigrationMkBarcode = ({
+  product_id,
+  brand_id,
+  category_id,
+  unit_id,
+  quantity,
+}) =>
+  '890' +
+  padMigrationBarcodePart(product_id, 4) +
+  padMigrationBarcodePart(brand_id, 3) +
+  padMigrationBarcodePart(category_id, 2) +
+  padMigrationBarcodePart(unit_id, 2) +
+  padMigrationBarcodePart(parseInt(quantity || 0, 10), 3);
 
 const isInternalPackingDestination = (destination) => {
   const normalized = String(destination || '')
@@ -635,12 +677,10 @@ const validateDispatchItems = (items = []) => {
     if (
       !item.product_barcode_id &&
       !item.inventory_product_id &&
-      !item.MK_BARCODE &&
       !item.mk_barcode &&
-      !item.mkBarcode &&
       !item.barcode
     ) {
-      throw new Error('MK_BARCODE is required for every item');
+      throw new Error('mk_barcode is required for every item');
     }
 
     if (!toPgDate(item.exp_date)) {
@@ -672,7 +712,7 @@ const hydrateDispatchItemsFromBarcodes = async (client, items = []) => {
       throw new Error(`Inventory stock not found for inventory ID ${item.inventory_product_id}`);
     }
 
-    const itemMkBarcode = item.MK_BARCODE || item.mk_barcode || item.mkBarcode || item.barcode;
+    const itemMkBarcode = item.mk_barcode || item.barcode;
     const barcodeResult = await client.query(
       `
       SELECT
@@ -685,7 +725,7 @@ const hydrateDispatchItemsFromBarcodes = async (client, items = []) => {
       FROM catalog.product_barcodes pb
       WHERE (
           ($1::bigint IS NOT NULL AND pb.id = $1::bigint)
-          OR ($2::text IS NOT NULL AND (pb.mk_barcode = $2::text OR pb.barcode = $2::text))
+          OR ($2::text IS NOT NULL AND pb.mk_barcode = $2::text)
         )
         AND COALESCE(pb.is_active, true) = true
       `,
@@ -698,7 +738,7 @@ const hydrateDispatchItemsFromBarcodes = async (client, items = []) => {
     );
 
     if (barcodeResult.rowCount === 0) {
-      throw new Error(`Invalid MK_BARCODE ${itemMkBarcode || item.product_barcode_id}`);
+      throw new Error(`Invalid mk_barcode ${itemMkBarcode || item.product_barcode_id}`);
     }
 
     const barcodeInfo = barcodeResult.rows[0];
@@ -1809,18 +1849,62 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       const bodyItem =
         bodyItems.find((receivedItem) =>
           Number(receivedItem.dispatch_order_item_id) === Number(item.id) ||
+          Number(receivedItem.inventory_product_id) === Number(item.inventory_product_id) ||
           Number(receivedItem.product_barcode_id) === Number(item.catalog_product_barcode_id) ||
-          String(receivedItem.MK_BARCODE || receivedItem.mk_barcode || receivedItem.barcode || '') ===
-            String(item.mk_barcode || item.barcode || '')
+          String(receivedItem.mk_barcode || '') === String(item.mk_barcode || '')
         ) ||
-        (items.length === 1 && bodyItems.length === 1 ? bodyItems[0] : null);
+        (items.length === 1 && bodyItems.length === 1 ? bodyItems[0] : null) ||
+        (items.length === 1 ? req.body : null);
+      const explicitSellingPrice =
+        bodyItem?.selling_price ??
+        bodyItem?.sellingPrice ??
+        bodyItem?.salePrice ??
+        bodyItem?.dprice ??
+        bodyItem?.package_amount ??
+        req.body?.selling_price ??
+        req.body?.sellingPrice ??
+        req.body?.salePrice ??
+        req.body?.dprice ??
+        req.body?.package_amount;
+      const explicitMrpPrice =
+        bodyItem?.unit_mrp ??
+        bodyItem?.unit_MRP ??
+        bodyItem?.price ??
+        bodyItem?.mrp_amount ??
+        req.body?.unit_mrp ??
+        req.body?.unit_MRP ??
+        req.body?.price ??
+        req.body?.mrp_amount;
+      const explicitDiscount =
+        bodyItem?.discount ??
+        bodyItem?.Discount ??
+        req.body?.discount ??
+        req.body?.Discount;
+      if (!item.mk_barcode) {
+        item.mk_barcode = makeMigrationMkBarcode({
+          product_id: item.product_id,
+          brand_id: item.brand_id,
+          category_id: item.category_id,
+          unit_id: item.unit_id,
+          quantity: item.barcode_quantity || item.qty,
+        });
+        await client.query(
+          `
+          UPDATE catalog.product_barcodes
+          SET mk_barcode = $1, updated_at = NOW()
+          WHERE id = $2
+            AND (mk_barcode IS NULL OR mk_barcode = '')
+          `,
+          [item.mk_barcode, item.catalog_product_barcode_id]
+        );
+      }
       const effectiveMkBarcode =
-        bodyItem?.MK_BARCODE || bodyItem?.mk_barcode || item.mk_barcode || item.barcode;
+        bodyItem?.mk_barcode || item.mk_barcode;
       const effectiveVendorBarcode =
-        bodyItem?.vendor_barcode || bodyItem?.barcode || item.barcode || item.mk_barcode;
+        bodyItem?.vendor_barcode || bodyItem?.vendorBarcode || null;
       const barcodes = [
         ...new Set(
-          [effectiveVendorBarcode, effectiveMkBarcode, item.barcode, item.mk_barcode]
+          [effectiveVendorBarcode, effectiveMkBarcode]
             .filter(Boolean)
             .map(String)
         ),
@@ -1834,27 +1918,18 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       const qtyToAdd = Number(item.no_of_units ?? item.qty ?? 0);
       const imageUrl = bodyItem?.image_url || bodyItem?.imageUrl || item.image_url || null;
       const packagePrice = Number(
-        bodyItem?.selling_price ??
-          bodyItem?.sellingPrice ??
-          bodyItem?.salePrice ??
-          bodyItem?.dprice ??
-          bodyItem?.package_amount ??
+        explicitSellingPrice ??
           item.inventory_unit_price ??
           item.actual_unit_price ??
           item.expected_unit_price ??
           0
       );
       const mrpPrice = Number(
-        bodyItem?.unit_mrp ??
-          bodyItem?.unit_MRP ??
-          bodyItem?.price ??
-          bodyItem?.mrp_amount ??
+        explicitMrpPrice ??
           item.inventory_unit_mrp ??
           (packagePrice > 0 ? Math.round(packagePrice * 1.25) : 0)
       );
-      const discount = Number(
-        bodyItem?.discount ?? bodyItem?.Discount ?? item.discount ?? item.Discount ?? 0
-      );
+      const discount = Number(explicitDiscount ?? item.discount ?? item.Discount ?? 0);
       const stockValueInput =
         bodyItem?.countInStock ??
         bodyItem?.count_in_stock ??
@@ -1865,21 +1940,67 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       const targetStock = Number.isFinite(stockValue) ? stockValue : qtyToAdd;
       const sellingPrice = packagePrice;
       const unitPrice = mrpPrice;
+      const forceNewMongoProduct = Boolean(
+        bodyItem?.force_new_mongo_product || bodyItem?.forceNewMongoProduct
+      );
 
       if (!Number.isFinite(qtyToAdd) || qtyToAdd <= 0) {
         res.status(400);
         throw new Error(`Invalid qty for item ${item.id}`);
       }
 
-      let product =
-        (bodyItem?.mongo_product_id ? await Product.findById(bodyItem.mongo_product_id) : null) ||
-        (await Product.findOne({ 'details.financials.barcode': { $in: barcodes } })) ||
-        (await Product.findOne({ 'details.financials.MK_BARCODE': { $in: barcodes } })) ||
-        (await Product.findOne({ 'details.financials.mkBarcode': { $in: barcodes } })) ||
-        (await Product.findOne({
-          'details.financials.catalogProductBarcodeId': Number(item.catalog_product_barcode_id),
-        })) ||
-        (await Product.findOne({ catalogProductId: Number(item.product_id) }));
+      const catalogProductName = item.product_name_eng || item.product_name_tel || '';
+      let product = null;
+
+      if (bodyItem?.mongo_product_id && !forceNewMongoProduct) {
+        product = await Product.findById(bodyItem.mongo_product_id);
+        if (product && !mongoProductMatchesCatalogItem(product, item)) {
+          product = null;
+        }
+      }
+
+      if (!product && forceNewMongoProduct) {
+        product = await Product.findOne({
+          catalogProductId: Number(item.product_id),
+          $or: [
+            { name: catalogProductName },
+            { productname: catalogProductName },
+            { englishname: catalogProductName },
+          ],
+        });
+        if (product && !mongoProductMatchesCatalogItem(product, item)) {
+          product = null;
+        }
+      }
+
+      if (!product && !forceNewMongoProduct) {
+        const productByMkBarcode =
+          (await Product.findOne({ 'details.financials.mk_barcode': String(effectiveMkBarcode) })) ||
+          (await Product.findOne({
+            'details.financials.product_barcode_id': Number(item.catalog_product_barcode_id),
+          })) ||
+          (await Product.findOne({
+            'details.financials.catalogProductBarcodeId': Number(item.catalog_product_barcode_id),
+          })) ||
+          null;
+        if (productByMkBarcode && mongoProductMatchesCatalogItem(productByMkBarcode, item)) {
+          product = productByMkBarcode;
+        }
+        if (!product) {
+          product =
+            (await Product.findOne({ catalogProductId: Number(item.product_id) })) ||
+            (await Product.findOne({
+              $or: [
+                { name: catalogProductName },
+                { productname: catalogProductName },
+                { englishname: catalogProductName },
+              ],
+            }));
+        }
+        if (product && !mongoProductMatchesCatalogItem(product, item)) {
+          product = null;
+        }
+      }
 
       if (!product) {
         const productName =
@@ -1912,16 +2033,19 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       }
 
       let detail =
-        (product.details || []).find((productDetail) =>
-          sameMongoId(productDetail._id, bodyItem?.mongo_detail_id)
-        ) ||
-        (product.details || []).find((productDetail) =>
-          (productDetail.financials || []).some(
-            (itemFinancial) =>
-              hasBarcode(itemFinancial, effectiveVendorBarcode) ||
-              hasBarcode(itemFinancial, effectiveMkBarcode)
-          )
-        ) ||
+        (!forceNewMongoProduct
+          ? (product.details || []).find((productDetail) =>
+              sameMongoId(productDetail._id, bodyItem?.mongo_detail_id)
+            )
+          : null) ||
+        (!forceNewMongoProduct
+          ? (product.details || []).find((productDetail) =>
+              (productDetail.financials || []).some(
+                (itemFinancial) =>
+                  mongoFinancialMatchesCatalogBarcode(itemFinancial, item, effectiveMkBarcode)
+              )
+            )
+          : null) ||
         (product.details || []).find(
           (productDetail) =>
             Number(productDetail.catalogBrandId) === Number(item.brand_id) ||
@@ -1951,17 +2075,8 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       }
 
       let financial =
-        (detail.financials || []).find((itemFinancial) =>
-          sameMongoId(itemFinancial._id, bodyItem?.mongo_financial_id)
-        ) ||
         (detail.financials || []).find(
-          (itemFinancial) =>
-            hasBarcode(itemFinancial, effectiveVendorBarcode) ||
-            hasBarcode(itemFinancial, effectiveMkBarcode) ||
-            hasBarcode(itemFinancial, item.mk_barcode) ||
-            hasBarcode(itemFinancial, item.barcode) ||
-            Number(itemFinancial.catalogProductBarcodeId) ===
-              Number(item.catalog_product_barcode_id)
+          (itemFinancial) => mongoFinancialMatchesCatalogBarcode(itemFinancial, item, effectiveMkBarcode)
         );
 
       const oldStock = financial ? Number(financial.countInStock || 0) : 0;
@@ -1977,19 +2092,21 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         financial.createdAt = financial.createdAt || migrationTimestamp;
         financial.updatedAt = migrationTimestamp;
         financial.catalogProductBarcodeId = Number(item.catalog_product_barcode_id);
+        financial.product_barcode_id = Number(item.catalog_product_barcode_id);
         financial.mkid = Number(item.catalog_product_barcode_id);
         financial.quantity = Number(item.barcode_quantity || item.qty || financial.quantity || 0);
         financial.units = item.unit_short_code || item.unit_name || financial.units || 'unit';
-        financial.MK_BARCODE = effectiveMkBarcode || financial.MK_BARCODE || effectiveVendorBarcode;
-        financial.mkBarcode = effectiveMkBarcode || financial.mkBarcode || effectiveVendorBarcode;
+        financial.mk_barcode = effectiveMkBarcode;
+        delete financial.MK_BARCODE;
+        delete financial.mkBarcode;
         financial.barcode = barcodes;
       } else {
         detail.financials.push({
           _id: new mongoose.Types.ObjectId(),
           catalogProductBarcodeId: Number(item.catalog_product_barcode_id),
+          product_barcode_id: Number(item.catalog_product_barcode_id),
           mkid: Number(item.catalog_product_barcode_id),
-          MK_BARCODE: effectiveMkBarcode || effectiveVendorBarcode,
-          mkBarcode: effectiveMkBarcode || effectiveVendorBarcode,
+          mk_barcode: effectiveMkBarcode,
           price: unitPrice,
           dprice: sellingPrice,
           Discount: discount,
@@ -2007,6 +2124,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       await product.save();
       const forcedMongoSet = {
         'details.$[detail].financials.$[financial].catalogProductBarcodeId': Number(item.catalog_product_barcode_id),
+        'details.$[detail].financials.$[financial].product_barcode_id': Number(item.catalog_product_barcode_id),
         'details.$[detail].financials.$[financial].mkid': Number(item.catalog_product_barcode_id),
         'details.$[detail].financials.$[financial].price': unitPrice,
         'details.$[detail].financials.$[financial].dprice': sellingPrice,
@@ -2016,8 +2134,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         'details.$[detail].financials.$[financial].updatedAt': migrationTimestamp,
         'details.$[detail].financials.$[financial].units': item.unit_short_code || item.unit_name || 'unit',
         'details.$[detail].financials.$[financial].barcode': barcodes,
-        'details.$[detail].financials.$[financial].MK_BARCODE': effectiveMkBarcode || effectiveVendorBarcode,
-        'details.$[detail].financials.$[financial].mkBarcode': effectiveMkBarcode || effectiveVendorBarcode,
+        'details.$[detail].financials.$[financial].mk_barcode': effectiveMkBarcode,
       };
       if (!oldFinancialState?.createdAt) {
         forcedMongoSet['details.$[detail].financials.$[financial].createdAt'] =
@@ -2030,6 +2147,8 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         'details.$[detail].financials.$[financial].purchase_amount': '',
         'details.$[detail].financials.$[financial].mfg_date': '',
         'details.$[detail].financials.$[financial].exp_date': '',
+        'details.$[detail].financials.$[financial].MK_BARCODE': '',
+        'details.$[detail].financials.$[financial].mkBarcode': '',
       };
 
       if (imageUrl) {
