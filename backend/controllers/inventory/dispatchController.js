@@ -1899,8 +1899,31 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       }
       const effectiveMkBarcode =
         bodyItem?.mk_barcode || item.mk_barcode;
+      const explicitVendorBarcode =
+        bodyItem?.vendor_barcode ??
+        bodyItem?.vendorBarcode ??
+        bodyItem?.barcode ??
+        req.body?.vendor_barcode ??
+        req.body?.vendorBarcode ??
+        req.body?.barcode ??
+        null;
       const effectiveVendorBarcode =
-        bodyItem?.vendor_barcode || bodyItem?.vendorBarcode || null;
+        explicitVendorBarcode &&
+        String(explicitVendorBarcode).trim() &&
+        String(explicitVendorBarcode).trim() !== String(effectiveMkBarcode)
+          ? String(explicitVendorBarcode).trim()
+          : null;
+      if (effectiveVendorBarcode) {
+        await client.query(
+          `
+          UPDATE catalog.product_barcodes
+          SET barcode = $1, updated_at = NOW()
+          WHERE id = $2
+          `,
+          [effectiveVendorBarcode, item.catalog_product_barcode_id]
+        );
+        item.barcode = effectiveVendorBarcode;
+      }
       const barcodes = [
         ...new Set(
           [effectiveVendorBarcode, effectiveMkBarcode]
