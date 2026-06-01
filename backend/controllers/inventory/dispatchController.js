@@ -61,8 +61,7 @@ const mongoProductMatchesCatalogItem = (product, item) => {
   );
 };
 
-const mongoFinancialMatchesCatalogBarcode = (financial, item, mkBarcode) =>
-  String(financial?.mk_barcode || '') === String(mkBarcode || '') ||
+const mongoFinancialMatchesCatalogBarcode = (financial, item) =>
   Number(financial?.product_barcode_id) === Number(item?.catalog_product_barcode_id) ||
   Number(financial?.catalogProductBarcodeId) === Number(item?.catalog_product_barcode_id);
 
@@ -1974,8 +1973,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       }
 
       if (!product && !forceNewMongoProduct) {
-        const productByMkBarcode =
-          (await Product.findOne({ 'details.financials.mk_barcode': String(effectiveMkBarcode) })) ||
+        const productByCatalogBarcode =
           (await Product.findOne({
             'details.financials.product_barcode_id': Number(item.catalog_product_barcode_id),
           })) ||
@@ -1983,8 +1981,8 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
             'details.financials.catalogProductBarcodeId': Number(item.catalog_product_barcode_id),
           })) ||
           null;
-        if (productByMkBarcode && mongoProductMatchesCatalogItem(productByMkBarcode, item)) {
-          product = productByMkBarcode;
+        if (productByCatalogBarcode && mongoProductMatchesCatalogItem(productByCatalogBarcode, item)) {
+          product = productByCatalogBarcode;
         }
         if (!product) {
           product =
@@ -2042,7 +2040,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
           ? (product.details || []).find((productDetail) =>
               (productDetail.financials || []).some(
                 (itemFinancial) =>
-                  mongoFinancialMatchesCatalogBarcode(itemFinancial, item, effectiveMkBarcode)
+                  mongoFinancialMatchesCatalogBarcode(itemFinancial, item)
               )
             )
           : null) ||
@@ -2076,7 +2074,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
 
       let financial =
         (detail.financials || []).find(
-          (itemFinancial) => mongoFinancialMatchesCatalogBarcode(itemFinancial, item, effectiveMkBarcode)
+          (itemFinancial) => mongoFinancialMatchesCatalogBarcode(itemFinancial, item)
         );
 
       const oldStock = financial ? Number(financial.countInStock || 0) : 0;
