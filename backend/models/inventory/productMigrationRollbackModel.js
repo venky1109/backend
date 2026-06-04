@@ -756,27 +756,19 @@ const hasFinancialBarcode = (financial, codes = []) => {
   );
 };
 
-const findMongoFinancial = async (mkBarcode, catalogProductBarcodeId = null) => {
+const findMongoFinancial = async (mkBarcode) => {
   const barcodes = toBarcodeArray(mkBarcode);
-  if (!barcodes.length && !catalogProductBarcodeId) return null;
+  if (!barcodes.length) return null;
 
-  const product =
-    (catalogProductBarcodeId
-      ? await Product.findOne({
-          'details.financials.catalogProductBarcodeId': Number(catalogProductBarcodeId),
-        })
-      : null) ||
-    (barcodes.length
-      ? await Product.findOne({ 'details.financials.mk_barcode': { $in: barcodes } })
-      : null);
+  const product = await Product.findOne({
+    'details.financials.mk_barcode': { $in: barcodes },
+  });
 
   if (!product) return null;
 
   for (const detail of product.details || []) {
     const financial = (detail.financials || []).find(
-      (item) =>
-        Number(item.catalogProductBarcodeId) === Number(catalogProductBarcodeId) ||
-        hasFinancialBarcode(item, barcodes)
+      (item) => hasFinancialBarcode(item, barcodes)
     );
 
     if (financial) return { product, detail, financial };
@@ -1105,7 +1097,7 @@ const buildOutletMigrationPreview = async (db, input, selectedRequest, { lock = 
     const rollbackQty = input.quantity || Number(item.no_of_units || item.qty || 0);
     const mongoMatch =
       status === 'received_to_outlet'
-        ? await findMongoFinancial(item.mk_barcode || item.barcode, item.product_barcode_id)
+        ? await findMongoFinancial(item.mk_barcode)
         : null;
     const mongoStockBefore = mongoMatch ? Number(mongoMatch.financial.countInStock || 0) : null;
     const receiveSnapshot =
@@ -1953,10 +1945,7 @@ const rollbackOutletMigration = async (client, input, preview) => {
     const rollbackQty = Number(item.rollback_quantity || 0);
 
     if (item.mongo_stock_before !== null) {
-      const mongoMatch = await findMongoFinancial(
-        item.catalog?.mk_barcode || item.catalog?.barcode,
-        item.product_barcode_id
-      );
+      const mongoMatch = await findMongoFinancial(item.catalog?.mk_barcode);
 
       if (!mongoMatch) {
         throw new Error(`Mongo product not found for product barcode ${item.product_barcode_id}`);

@@ -62,8 +62,7 @@ const mongoProductMatchesCatalogItem = (product, item) => {
 };
 
 const mongoFinancialMatchesCatalogBarcode = (financial, item) =>
-  Number(financial?.product_barcode_id) === Number(item?.catalog_product_barcode_id) ||
-  Number(financial?.catalogProductBarcodeId) === Number(item?.catalog_product_barcode_id);
+  Boolean(item?.mk_barcode) && String(financial?.mk_barcode || '') === String(item.mk_barcode);
 
 const padMigrationBarcodePart = (value, size) => String(value || '').padStart(size, '0');
 
@@ -119,6 +118,31 @@ const makeInternalPackingSkuId = ({
     .slice(0, 80);
 
   return `PACK-D${dispatchOrderId}-I${dispatchItemId}-P${packingIndex}-${sourcePart}`;
+};
+
+const padCatalogBarcodePart = (value, size) => String(value || '').padStart(size, '0');
+
+const makeCatalogMkBarcode = ({
+  product_id,
+  brand_id,
+  category_id,
+  unit_id,
+  quantity,
+}) => {
+  if (Number(product_id) > 9999) throw new Error('product_id exceeds 4 digits');
+  if (Number(brand_id) > 999) throw new Error('brand_id exceeds 3 digits');
+  if (Number(category_id) > 99) throw new Error('category_id exceeds 2 digits');
+  if (Number(unit_id) > 99) throw new Error('unit_id exceeds 2 digits');
+  if (Number(quantity) > 999) throw new Error('quantity exceeds 3 digits');
+
+  return (
+    '890' +
+    padCatalogBarcodePart(product_id, 4) +
+    padCatalogBarcodePart(brand_id, 3) +
+    padCatalogBarcodePart(category_id, 2) +
+    padCatalogBarcodePart(unit_id, 2) +
+    padCatalogBarcodePart(quantity, 3)
+  );
 };
 
 const toPackingConfigArray = (value, item = {}) => {
@@ -198,23 +222,44 @@ const normalizePackingConfigs = (item = {}) => {
       : config.ratePlanId
         ? Number(config.ratePlanId)
         : null,
-    product_barcode_id: config.product_barcode_id
-      ? Number(config.product_barcode_id)
-      : config.productBarcodeId
-        ? Number(config.productBarcodeId)
-        : config.packing_product_barcode_id
-          ? Number(config.packing_product_barcode_id)
-          : config.packingProductBarcodeId
-            ? Number(config.packingProductBarcodeId)
-            : config.packed_product_barcode_id
-              ? Number(config.packed_product_barcode_id)
-              : config.packedProductBarcodeId
-                ? Number(config.packedProductBarcodeId)
-                : config.output_product_barcode_id
-                  ? Number(config.output_product_barcode_id)
-                  : config.outputProductBarcodeId
-                    ? Number(config.outputProductBarcodeId)
-                    : null,
+    product_barcode_id:
+      Number(
+        config.product_barcode_id ??
+          config.productBarcodeId ??
+          config.packing_product_barcode_id ??
+          config.packingProductBarcodeId ??
+          config.packed_product_barcode_id ??
+          config.packedProductBarcodeId ??
+          config.output_product_barcode_id ??
+          config.outputProductBarcodeId ??
+          0
+      ) || null,
+    product_id: config.product_id ? Number(config.product_id) : null,
+    brand_id: config.brand_id ? Number(config.brand_id) : null,
+    category_id: config.category_id ? Number(config.category_id) : null,
+    unit_id: config.unit_id ? Number(config.unit_id) : null,
+    barcode_quantity: Number(
+      config.barcode_quantity ??
+        config.barcodeQuantity ??
+        config.pack_quantity ??
+        config.packQuantity ??
+        config.quantity ??
+        0
+    ),
+    unit_short_code: config.unit_short_code ?? config.unitShortCode ?? null,
+    source_pack_quantity: Number(
+      config.source_pack_quantity ??
+        config.sourcePackQuantity ??
+        config.source_quantity ??
+        config.sourceQuantity ??
+        0
+    ),
+    source_pack_unit_short_code:
+      config.source_pack_unit_short_code ??
+      config.sourcePackUnitShortCode ??
+      config.source_pack_unit ??
+      config.sourcePackUnit ??
+      null,
     qty: Number(
       config.no_of_units ??
         config.noOfUnits ??
@@ -244,6 +289,7 @@ const normalizePackingConfigs = (item = {}) => {
     transport_percentage: Number(config.transport_percentage ?? config.transportPercentage ?? 0),
     load_percentage: Number(config.load_percentage ?? config.loadPercentage ?? 0),
     unload_percentage: Number(config.unload_percentage ?? config.unloadPercentage ?? 0),
+    dynamic_pack: Boolean(config.dynamic_pack ?? config.dynamicPack ?? false),
     notes: config.notes || null,
   }));
 };
@@ -254,8 +300,14 @@ const validatePackingConfigs = (
   { requireRatePlan = true } = {}
 ) => {
   for (const config of configs) {
-    if (!config.product_barcode_id) {
+    if (!config.product_barcode_id && !config.dynamic_pack) {
       throw new Error(`Packing product barcode is required for dispatch ${itemId}`);
+    }
+
+    if (config.dynamic_pack && !config.product_barcode_id) {
+      if (!config.unit_id || Number(config.barcode_quantity || 0) <= 0) {
+        throw new Error(`Dynamic packing unit and quantity are required for dispatch ${itemId}`);
+      }
     }
 
     if (!Number.isFinite(config.qty) || config.qty <= 0) {
@@ -312,6 +364,45 @@ const getQuantityBaseUnits = (quantity, unitCode) => {
   }
 
   return qty;
+};
+
+const isWeightUnitCode = (unitCode) => {
+  const normalizedUnit = String(unitCode || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\./g, '');
+
+  return (
+    normalizedUnit.startsWith('kg') ||
+    normalizedUnit.startsWith('gm') ||
+    normalizedUnit.startsWith('gms') ||
+    normalizedUnit === 'g'
+  );
+};
+
+const getPackedBaseQuantity = (packingBarcode) =>
+  getQuantityBaseUnits(
+    packingBarcode?.quantity,
+    packingBarcode?.unit_short_code || packingBarcode?.unit_name
+  );
+
+const getPricingSourceBaseQuantity = (sourceProduct, packingRows = [], sourceUnits = 1) => {
+  const sourceUnitCode =
+    sourceProduct?.barcode_unit_short_code ||
+    sourceProduct?.barcode_unit_name ||
+    sourceProduct?.unit_short_code ||
+    sourceProduct?.unit_name;
+  const sourceBaseQty = getQuantityBaseUnits(sourceProduct?.barcode_quantity, sourceUnitCode);
+
+  if (isWeightUnitCode(sourceUnitCode)) return sourceBaseQty;
+
+  const totalPackedBaseQty = packingRows.reduce(
+    (sum, row) => sum + getPackedBaseQuantity(row.barcode) * Number(row.config?.qty || 0),
+    0
+  );
+  const units = Number(sourceUnits || 1);
+
+  return totalPackedBaseQty && units > 0 ? totalPackedBaseQty / units : sourceBaseQty;
 };
 
 const ensureCatalogRatePlansTable = async (client) => {
@@ -453,19 +544,173 @@ const applyRatePlansToPackingConfigs = async (client, configs = []) => {
   });
 };
 
-const calculatePackedUnitPrice = ({ explicitPrice, sourceProduct, packingBarcode, packingConfig }) => {
+const ensurePackingCatalogBarcodeAndRatePlan = async (
+  client,
+  config = {},
+  sourceBarcode = {}
+) => {
+  if (config.product_barcode_id && config.rate_plan_id) return config;
+
+  const productId = Number(config.product_id || sourceBarcode.product_id);
+  const brandId = Number(config.brand_id || sourceBarcode.brand_id);
+  const categoryId = Number(config.category_id || sourceBarcode.category_id);
+  const unitId = Number(config.unit_id);
+  const quantity = Number(config.barcode_quantity || config.quantity || config.pack_quantity);
+
+  if (!config.product_barcode_id) {
+    if (!productId || !brandId || !categoryId || !unitId || !quantity) {
+      throw new Error('Product, brand, category, unit and pack quantity are required for dynamic packing');
+    }
+
+    const mkBarcode = makeCatalogMkBarcode({
+      product_id: productId,
+      brand_id: brandId,
+      category_id: categoryId,
+      unit_id: unitId,
+      quantity,
+    });
+
+    const existingBarcodeResult = await client.query(
+      `
+      SELECT *
+      FROM catalog.product_barcodes
+      WHERE mk_barcode = $1
+         OR (
+          product_id = $2
+          AND brand_id = $3
+          AND category_id = $4
+          AND unit_id = $5
+          AND quantity = $6
+        )
+      ORDER BY
+        CASE WHEN mk_barcode = $1 THEN 0 ELSE 1 END,
+        id DESC
+      LIMIT 1
+      `,
+      [mkBarcode, productId, brandId, categoryId, unitId, quantity]
+    );
+
+    if (existingBarcodeResult.rows[0]) {
+      config = {
+        ...config,
+        product_barcode_id: Number(existingBarcodeResult.rows[0].id),
+        mk_barcode: existingBarcodeResult.rows[0].mk_barcode,
+        barcode: existingBarcodeResult.rows[0].barcode || existingBarcodeResult.rows[0].mk_barcode,
+      };
+    } else {
+      const insertedBarcodeResult = await client.query(
+        `
+        INSERT INTO catalog.product_barcodes (
+          product_id,
+          brand_id,
+          category_id,
+          unit_id,
+          quantity,
+          mk_barcode,
+          is_active
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,TRUE)
+        RETURNING *
+        `,
+        [productId, brandId, categoryId, unitId, quantity, mkBarcode]
+      );
+
+      config = {
+        ...config,
+        product_barcode_id: Number(insertedBarcodeResult.rows[0].id),
+        mk_barcode: insertedBarcodeResult.rows[0].mk_barcode,
+        barcode: insertedBarcodeResult.rows[0].mk_barcode,
+      };
+    }
+  }
+
+  if (config.rate_plan_id) return config;
+
+  await ensureCatalogRatePlansTable(client);
+
+  const rateFor = config.rate_for || 'internal_packing';
+  const existingRatePlanResult = await client.query(
+    `
+    SELECT *
+    FROM catalog.rate_plans
+    WHERE product_barcode_id = $1
+      AND lower(rate_for) = lower($2)
+    LIMIT 1
+    `,
+    [Number(config.product_barcode_id), rateFor]
+  );
+
+  if (existingRatePlanResult.rows[0]) {
+    return applyRatePlanDefaults(
+      { ...config, rate_plan_id: Number(existingRatePlanResult.rows[0].id) },
+      new Map([[Number(existingRatePlanResult.rows[0].id), existingRatePlanResult.rows[0]]])
+    );
+  }
+
+  const insertedRatePlanResult = await client.query(
+    `
+    INSERT INTO catalog.rate_plans (
+      product_barcode_id,
+      rate_for,
+      gst_rate,
+      margin_percentage,
+      labour_percentage,
+      transport_percentage,
+      load_percentage,
+      unload_percentage,
+      notes
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+    RETURNING *
+    `,
+    [
+      Number(config.product_barcode_id),
+      rateFor,
+      Number(config.gst_rate || 0),
+      Number(config.margin_percentage || 0),
+      Number(config.labour_percentage || 0),
+      Number(config.transport_percentage || 0),
+      Number(config.load_percentage || 0),
+      Number(config.unload_percentage || 0),
+      config.notes || 'Auto-created from internal packing',
+    ]
+  );
+
+  return applyRatePlanDefaults(
+    { ...config, rate_plan_id: Number(insertedRatePlanResult.rows[0].id) },
+    new Map([[Number(insertedRatePlanResult.rows[0].id), insertedRatePlanResult.rows[0]]])
+  );
+};
+
+const ensureDynamicPackingConfigs = async (client, configs = [], sourceBarcode = {}) => {
+  const resolvedConfigs = [];
+
+  for (const config of configs) {
+    resolvedConfigs.push(
+      await ensurePackingCatalogBarcodeAndRatePlan(client, config, sourceBarcode)
+    );
+  }
+
+  return applyRatePlansToPackingConfigs(client, resolvedConfigs);
+};
+
+const calculatePackedUnitPrice = ({
+  explicitPrice,
+  sourceProduct,
+  packingBarcode,
+  packingConfig,
+  sourceBaseQtyOverride = null,
+}) => {
   const explicit = Number(explicitPrice);
-  if (Number.isFinite(explicit) && explicit > 0) return explicit;
 
   const sourcePrice = Number(sourceProduct?.unit_price || 0);
-  const sourceBaseQty = getQuantityBaseUnits(
-    sourceProduct?.barcode_quantity,
-    sourceProduct?.barcode_unit_short_code || sourceProduct?.barcode_unit_name
-  );
-  const packedBaseQty = getQuantityBaseUnits(
-    packingBarcode?.quantity,
-    packingBarcode?.unit_short_code || packingBarcode?.unit_name
-  );
+  const sourceBaseQty =
+    Number(sourceBaseQtyOverride || 0) ||
+    getQuantityBaseUnits(
+      sourceProduct?.barcode_quantity,
+      sourceProduct?.barcode_unit_short_code || sourceProduct?.barcode_unit_name
+    );
+  const packedBaseQty = getPackedBaseQuantity(packingBarcode);
 
   if (!sourcePrice || !sourceBaseQty || !packedBaseQty) return sourcePrice || 0;
 
@@ -477,7 +722,75 @@ const calculatePackedUnitPrice = ({ explicitPrice, sourceProduct, packingBarcode
     Number(packingConfig?.load_percentage || 0) +
     Number(packingConfig?.unload_percentage || 0);
 
-  return Math.ceil(baseAmount + (baseAmount * percentTotal) / 100);
+  const calculated = Math.ceil(baseAmount + (baseAmount * percentTotal) / 100);
+
+  if (Number.isFinite(explicit) && explicit > 0 && explicit <= calculated * 10) {
+    return explicit;
+  }
+
+  return calculated;
+};
+
+const getPositiveNumber = (...values) => {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+
+  return null;
+};
+
+const enrichPackingConfigWithCalculatedPrices = ({
+  packingConfig,
+  packingBarcode,
+  sourceProduct,
+  notePrice = {},
+  sourceBaseQtyOverride = null,
+}) => {
+  const packedUnitPrice = calculatePackedUnitPrice({
+    explicitPrice:
+      packingConfig.package_amount ??
+      packingConfig.purchase_amount ??
+      notePrice.package_amount,
+    sourceProduct,
+    packingBarcode,
+    packingConfig,
+    sourceBaseQtyOverride,
+  });
+  const explicitMrp = getPositiveNumber(
+    packingConfig.mrp_amount,
+    packingConfig.MRP,
+    packingConfig.mrp,
+    notePrice.mrp_amount
+  );
+  const packedUnitMrp =
+    explicitMrp ?? (packedUnitPrice > 0 ? Math.round(packedUnitPrice * 1.25) : null);
+
+  return {
+    ...packingConfig,
+    product_barcode_id: Number(packingConfig.product_barcode_id),
+    product_id: packingBarcode.product_id ? Number(packingBarcode.product_id) : null,
+    brand_id: packingBarcode.brand_id ? Number(packingBarcode.brand_id) : null,
+    category_id: packingBarcode.category_id ? Number(packingBarcode.category_id) : null,
+    unit_id: packingBarcode.unit_id ? Number(packingBarcode.unit_id) : null,
+    barcode_quantity: packingBarcode.quantity,
+    quantity: packingBarcode.quantity,
+    unit_short_code: packingBarcode.unit_short_code,
+    unit_name: packingBarcode.unit_name,
+    barcode: packingBarcode.barcode || packingBarcode.mk_barcode || null,
+    mk_barcode: packingBarcode.mk_barcode || packingBarcode.barcode || null,
+    product_code: packingBarcode.product_code,
+    product_name: packingBarcode.product_name_eng || packingBarcode.product_name_tel || null,
+    product_name_eng: packingBarcode.product_name_eng,
+    product_name_tel: packingBarcode.product_name_tel,
+    package_amount: getPositiveNumber(
+      packingConfig.package_amount,
+      packingConfig.purchase_amount,
+      notePrice.package_amount,
+      packedUnitPrice
+    ),
+    mrp_amount: packedUnitMrp ?? getPositiveNumber(sourceProduct?.unit_mrp),
+  };
 };
 
 const getPackingPriceFromNotes = (notes, index) => {
@@ -741,9 +1054,10 @@ const hydrateDispatchItemsFromBarcodes = async (client, items = []) => {
     }
 
     const barcodeInfo = barcodeResult.rows[0];
-    const packingConfigs = await applyRatePlansToPackingConfigs(
+    let packingConfigs = await ensureDynamicPackingConfigs(
       client,
-      normalizePackingConfigs(item)
+      normalizePackingConfigs(item),
+      barcodeInfo
     );
     const packingRows = [];
 
@@ -783,6 +1097,36 @@ const hydrateDispatchItemsFromBarcodes = async (client, items = []) => {
         `Inventory stock not found for barcode ID ${item.product_barcode_id} and expiry ${expDate}`
       );
     }
+
+    const sourcePackQuantity = Number(
+      item.source_pack_quantity || packingConfigs[0]?.source_pack_quantity || 0
+    );
+    const sourcePackUnitShortCode =
+      item.source_pack_unit_short_code || packingConfigs[0]?.source_pack_unit_short_code || null;
+    const pricingSourceProduct = sourcePackQuantity && sourcePackUnitShortCode
+      ? {
+          ...inventoryStock,
+          barcode_quantity: sourcePackQuantity,
+          barcode_unit_short_code: sourcePackUnitShortCode,
+          barcode_unit_name: sourcePackUnitShortCode,
+        }
+      : inventoryStock;
+
+    const pricingSourceBaseQty = getPricingSourceBaseQuantity(
+      pricingSourceProduct,
+      packingRows,
+      units
+    );
+
+    packingConfigs = packingRows.map(({ config, barcode }, index) =>
+      enrichPackingConfigWithCalculatedPrices({
+        packingConfig: config,
+        packingBarcode: barcode,
+        sourceProduct: pricingSourceProduct,
+        notePrice: getPackingPriceFromNotes(item.notes, index),
+        sourceBaseQtyOverride: pricingSourceBaseQty,
+      })
+    );
 
     const availableUnits = Number(inventoryStock.no_of_units || 0);
 
@@ -1443,14 +1787,28 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
       let packingConfigs = normalizePackingConfigs({
         packing_configurations: packingConfigurations,
       });
-      packingConfigs = await applyRatePlansToPackingConfigs(client, packingConfigs);
+      packingConfigs = await ensureDynamicPackingConfigs(client, packingConfigs, {
+        product_id: item.product_id || item.barcode_product_id,
+        brand_id: item.brand_id,
+        category_id: item.category_id,
+      });
 
       validatePackingConfigs(packingConfigs, `item ${item.id}`);
+      const sourcePackQuantity = Number(packingConfigs[0]?.source_pack_quantity || 0);
+      const sourcePackUnitShortCode = packingConfigs[0]?.source_pack_unit_short_code || null;
+      const pricingSourceProduct = sourcePackQuantity && sourcePackUnitShortCode
+        ? {
+            ...sourceProduct,
+            barcode_quantity: sourcePackQuantity,
+            barcode_unit_short_code: sourcePackUnitShortCode,
+            barcode_unit_name: sourcePackUnitShortCode,
+          }
+        : sourceProduct;
+      const packingBarcodeByConfigIndex = new Map();
+      const pricingPackingRows = [];
 
       for (let packingIndex = 0; packingIndex < packingConfigs.length; packingIndex += 1) {
         const packingConfig = packingConfigs[packingIndex];
-        const notePrice = getPackingPriceFromNotes(item.notes, packingIndex);
-        const packedUnits = Number(packingConfig.qty);
         const packingBarcode = await getCatalogBarcodeForPacking(
           client,
           packingConfig.product_barcode_id
@@ -1462,23 +1820,32 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
           );
         }
 
-        const packedUnitPrice = calculatePackedUnitPrice({
-          explicitPrice:
-            packingConfig.package_amount ??
-            packingConfig.purchase_amount ??
-            notePrice.package_amount,
-          sourceProduct,
-          packingBarcode,
+        packingBarcodeByConfigIndex.set(packingIndex, packingBarcode);
+        pricingPackingRows.push({ config: packingConfig, barcode: packingBarcode });
+      }
+
+      const pricingSourceBaseQty = getPricingSourceBaseQuantity(
+        pricingSourceProduct,
+        pricingPackingRows,
+        dispatchUnits
+      );
+
+      for (let packingIndex = 0; packingIndex < packingConfigs.length; packingIndex += 1) {
+        const packingConfig = packingConfigs[packingIndex];
+        const notePrice = getPackingPriceFromNotes(item.notes, packingIndex);
+        const packedUnits = Number(packingConfig.qty);
+        const packingBarcode = packingBarcodeByConfigIndex.get(packingIndex);
+
+        const enrichedPackingConfig = enrichPackingConfigWithCalculatedPrices({
           packingConfig,
+          packingBarcode,
+          sourceProduct: pricingSourceProduct,
+          notePrice,
+          sourceBaseQtyOverride: pricingSourceBaseQty,
         });
-        const packedUnitMrp = Number(
-          packingConfig.mrp_amount ??
-            packingConfig.MRP ??
-            packingConfig.mrp ??
-            notePrice.mrp_amount ??
-            (packedUnitPrice > 0 ? Math.round(packedUnitPrice * 1.25) : sourceProduct.unit_mrp) ??
-            0
-        );
+        packingConfigs[packingIndex] = enrichedPackingConfig;
+        const packedUnitPrice = Number(enrichedPackingConfig.package_amount || 0);
+        const packedUnitMrp = Number(enrichedPackingConfig.mrp_amount || 0);
 
         const targetSkuId = makeInternalPackingSkuId({
           dispatchOrderId,
@@ -1679,6 +2046,15 @@ export const dispatchInternalPackingOrder = asyncHandler(async (req, res) => {
           packed_balance: Number(packedProduct.no_of_units || packedProduct.count_in_stock || 0),
         });
       }
+
+      await client.query(
+        `
+        UPDATE dispatch.dispatch_order_items
+        SET packing_configs = $1::jsonb
+        WHERE id = $2
+        `,
+        [JSON.stringify(packingConfigs), Number(item.id)]
+      );
     }
 
     await client.query(
@@ -1849,7 +2225,6 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
         bodyItems.find((receivedItem) =>
           Number(receivedItem.dispatch_order_item_id) === Number(item.id) ||
           Number(receivedItem.inventory_product_id) === Number(item.inventory_product_id) ||
-          Number(receivedItem.product_barcode_id) === Number(item.catalog_product_barcode_id) ||
           String(receivedItem.mk_barcode || '') === String(item.mk_barcode || '')
         ) ||
         (items.length === 1 && bodyItems.length === 1 ? bodyItems[0] : null) ||
@@ -1899,31 +2274,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       }
       const effectiveMkBarcode =
         bodyItem?.mk_barcode || item.mk_barcode;
-      const explicitVendorBarcode =
-        bodyItem?.vendor_barcode ??
-        bodyItem?.vendorBarcode ??
-        bodyItem?.barcode ??
-        req.body?.vendor_barcode ??
-        req.body?.vendorBarcode ??
-        req.body?.barcode ??
-        null;
-      const effectiveVendorBarcode =
-        explicitVendorBarcode &&
-        String(explicitVendorBarcode).trim() &&
-        String(explicitVendorBarcode).trim() !== String(effectiveMkBarcode)
-          ? String(explicitVendorBarcode).trim()
-          : null;
-      if (effectiveVendorBarcode) {
-        await client.query(
-          `
-          UPDATE catalog.product_barcodes
-          SET barcode = $1, updated_at = NOW()
-          WHERE id = $2
-          `,
-          [effectiveVendorBarcode, item.catalog_product_barcode_id]
-        );
-        item.barcode = effectiveVendorBarcode;
-      }
+      const effectiveVendorBarcode = null;
       const barcodes = [
         ...new Set(
           [effectiveVendorBarcode, effectiveMkBarcode]
@@ -1996,14 +2347,9 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       }
 
       if (!product && !forceNewMongoProduct) {
-        const productByCatalogBarcode =
-          (await Product.findOne({
-            'details.financials.product_barcode_id': Number(item.catalog_product_barcode_id),
-          })) ||
-          (await Product.findOne({
-            'details.financials.catalogProductBarcodeId': Number(item.catalog_product_barcode_id),
-          })) ||
-          null;
+        const productByCatalogBarcode = item.mk_barcode
+          ? await Product.findOne({ 'details.financials.mk_barcode': String(item.mk_barcode) })
+          : null;
         if (productByCatalogBarcode && mongoProductMatchesCatalogItem(productByCatalogBarcode, item)) {
           product = productByCatalogBarcode;
         }
