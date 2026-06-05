@@ -65,6 +65,21 @@ export const isAdminOrProp = allowRoles(
   'Admin, Proprietor, or Director access required'
 );
 
+// POS user lookup is needed by order/UPI flows to assign delivery users.
+export const posUserReadAccess = allowRoles(
+  [
+    'ADMIN',
+    'PROPRIETOR',
+    'DIRECTOR',
+    'CASHIER',
+    'ONLINE_CASHIER',
+    'HYBRID_CASHIER',
+    'SUPERVISOR',
+    'DELIVERY_AGENT',
+  ],
+  'POS user lookup access required'
+);
+
 
 // ✅ Admin / Inventory support
 export const isAdminOrInventory = allowRoles(

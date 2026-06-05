@@ -60,10 +60,33 @@ export const registerPosUser = async (req, res) => {
 };
 
 
-// @desc    Get all POS users (admin/proprietor only)
+const canManagePosUsers = (role) =>
+  ['ADMIN', 'PROPRIETOR', 'DIRECTOR'].includes(normalizeRole(role));
+
+const buildRoleFilter = (role) => {
+  const normalizedRole = normalizeRole(role);
+
+  if (!normalizedRole) return {};
+
+  if (normalizedRole === 'DELIVERY') {
+    return { role: /DELIVERY/i };
+  }
+
+  return { role: normalizedRole };
+};
+
+// @desc    Get POS users
 // @route   GET /api/pos_users
 export const getPosUsers = async (req, res) => {
-  const users = await PosUser.find({});
+  const requestedRole = req.query.role;
+  const isManager = canManagePosUsers(req.user?.role);
+  const filter = requestedRole
+    ? buildRoleFilter(requestedRole)
+    : isManager
+      ? {}
+      : { role: /DELIVERY/i };
+
+  const users = await PosUser.find(filter).select('-password');
   res.json(users);
 };
 
