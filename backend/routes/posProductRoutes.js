@@ -3,6 +3,7 @@ import {
   createPOSProductFromCatalog,
   addFinancialToPOSProduct,
   updatePOSProductFinancial,
+  upsertPOSProductFinancialFromAssigner,
   getPOSProductByBarcode,
   getPOSProductByCatalogProductBarcodeId,
 } from '../controllers/POSProductController.js';
@@ -17,6 +18,7 @@ router.use(protectPOS);
 // Only ADMIN or INVENTORY can create or modify product entries
 router.post('/create-from-catalog', isAdminOrInventory, createPOSProductFromCatalog);
 router.post('/add-financial', isAdminOrInventory, addFinancialToPOSProduct);
+router.post('/barcode-assigner/upsert', isAdminOrInventory, upsertPOSProductFinancialFromAssigner);
 router.put('/update-financial', isAdminOrInventory, updatePOSProductFinancial);
 router.get(
   '/catalog-product-barcode/:catalogProductBarcodeId',

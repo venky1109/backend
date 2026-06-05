@@ -71,8 +71,25 @@ const productSchema = new mongoose.Schema({
   numReviews: { type: Number },
   details: [productDetailSchema], // Array of product details
 });
-// Auto-generate slug from name
-productSchema.pre('save', function (next) {
+const makeUniqueProductSlug = async (ProductModel, baseSlug, currentId) => {
+  let candidate = baseSlug;
+  let serial = 1;
+
+  while (
+    await ProductModel.exists({
+      slug: candidate,
+      _id: { $ne: currentId },
+    })
+  ) {
+    candidate = `${baseSlug}-${serial}`;
+    serial += 1;
+  }
+
+  return candidate;
+};
+
+// Auto-generate a unique slug from name
+productSchema.pre('save', async function (next) {
   if (!this.name && this.productname) {
     this.name = this.productname;
   }
@@ -85,7 +102,8 @@ productSchema.pre('save', function (next) {
     const baseSlug = this.catalogProductId
       ? `${this.name}-${this.catalogProductId}`
       : this.name;
-    this.slug = slugify(baseSlug, { lower: true, strict: true });
+    const normalizedBaseSlug = slugify(baseSlug, { lower: true, strict: true });
+    this.slug = await makeUniqueProductSlug(this.constructor, normalizedBaseSlug, this._id);
   }
   next();
 });

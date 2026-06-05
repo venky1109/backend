@@ -106,6 +106,163 @@ export const updatePOSProductFinancial = async (req, res) => {
   }
 };
 
+const sameText = (left, right) =>
+  String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase();
+
+export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
+  try {
+    const {
+      productId,
+      detailId,
+      financialId,
+      productData = {},
+      detailData = {},
+      financialData = {},
+    } = req.body;
+
+    if (!financialData?.mk_barcode) {
+      return res.status(400).json({ error: 'MK barcode is required' });
+    }
+
+    let product = productId ? await Product.findById(productId) : null;
+
+    if (!product) {
+      product = await Product.findOne({ 'details.financials.mk_barcode': String(financialData.mk_barcode) });
+    }
+
+    if (!product && productData.catalogProductId && productData.catalogCategoryId) {
+      product = await Product.findOne({
+        catalogProductId: Number(productData.catalogProductId),
+        catalogCategoryId: Number(productData.catalogCategoryId),
+      });
+    }
+
+    if (!product && productData.name && productData.category) {
+      const candidates = await Product.find({
+        $or: [
+          { name: productData.name },
+          { productname: productData.name },
+          { englishname: productData.name },
+        ],
+      }).limit(25);
+      product = candidates.find((item) => sameText(item.category, productData.category)) || null;
+    }
+
+    if (!product) {
+      product = new Product({
+        _id: new mongoose.Types.ObjectId(),
+        catalogProductId: productData.catalogProductId ? Number(productData.catalogProductId) : undefined,
+        catalogCategoryId: productData.catalogCategoryId ? Number(productData.catalogCategoryId) : undefined,
+        mongoCategoryId: productData.mongoCategoryId || new mongoose.Types.ObjectId().toString(),
+        name: productData.name || productData.productname || productData.englishname,
+        productname: productData.productname || productData.name || productData.englishname,
+        englishname: productData.englishname || productData.name || '',
+        teluguname: productData.teluguname || '',
+        hsncode: productData.hsncode || '',
+        gst: Number(productData.gst || 0),
+        category: productData.category || 'Migration',
+        details: [],
+      });
+    } else {
+      product.catalogProductId = productData.catalogProductId
+        ? Number(productData.catalogProductId)
+        : product.catalogProductId;
+      product.catalogCategoryId = productData.catalogCategoryId
+        ? Number(productData.catalogCategoryId)
+        : product.catalogCategoryId;
+      product.name = productData.name || product.name;
+      product.productname = productData.productname || product.productname || product.name;
+      product.englishname = productData.englishname || product.englishname || product.name;
+      product.teluguname = productData.teluguname || product.teluguname;
+      product.hsncode = productData.hsncode || product.hsncode;
+      product.gst = productData.gst !== undefined && productData.gst !== null ? Number(productData.gst) : product.gst;
+      product.category = productData.category || product.category;
+    }
+
+    let detail =
+      (detailId ? product.details.id(detailId) : null) ||
+      product.details.find((item) =>
+        (detailData.catalogBrandId && Number(item.catalogBrandId) === Number(detailData.catalogBrandId)) ||
+        sameText(item.brand, detailData.brand)
+      );
+
+    if (!detail) {
+      product.details.push({
+        _id: new mongoose.Types.ObjectId(),
+        catalogBrandId: detailData.catalogBrandId ? Number(detailData.catalogBrandId) : undefined,
+        brand: detailData.brand || 'Migration',
+        description: detailData.description || 'Created from barcode assigner',
+        images: detailData.image ? [{ image: detailData.image }] : [],
+        financials: [],
+      });
+      detail = product.details[product.details.length - 1];
+    } else {
+      detail.catalogBrandId = detailData.catalogBrandId
+        ? Number(detailData.catalogBrandId)
+        : detail.catalogBrandId;
+      detail.brand = detailData.brand || detail.brand;
+      detail.description = detailData.description || detail.description || 'Created from barcode assigner';
+      if (detailData.image) {
+        if (detail.images?.length) {
+          detail.images[0].image = detailData.image;
+          detail.images = [detail.images[0]];
+        } else {
+          detail.images = [{ image: detailData.image }];
+        }
+      }
+    }
+
+    let financial =
+      (financialId ? detail.financials.id(financialId) : null) ||
+      detail.financials.find((item) => String(item.mk_barcode || '') === String(financialData.mk_barcode));
+
+    const cleanBarcode = Array.isArray(financialData.barcode)
+      ? financialData.barcode.filter(Boolean).map(String)
+      : financialData.barcode
+        ? [String(financialData.barcode)]
+        : [];
+
+    const nextFinancial = {
+      catalogProductBarcodeId: financialData.catalogProductBarcodeId,
+      product_barcode_id: financialData.product_barcode_id || financialData.catalogProductBarcodeId,
+      mkid: financialData.catalogProductBarcodeId,
+      mk_barcode: String(financialData.mk_barcode),
+      price: Number(financialData.price || 0),
+      dprice: Number(financialData.dprice || 0),
+      Discount: Number(financialData.Discount ?? financialData.discount ?? 0),
+      quantity: Number(financialData.quantity || 0),
+      countInStock: Number(financialData.countInStock || 0),
+      units: financialData.units || 'QTY',
+      barcode: cleanBarcode,
+      updatedAt: new Date(),
+    };
+
+    if (financial) {
+      Object.assign(financial, nextFinancial);
+      financial.createdAt = financial.createdAt || financialData.createdAt || new Date();
+    } else {
+      detail.financials.push({
+        _id: new mongoose.Types.ObjectId(),
+        ...nextFinancial,
+        createdAt: financialData.createdAt || new Date(),
+      });
+      financial = detail.financials[detail.financials.length - 1];
+    }
+
+    await product.save();
+
+    res.status(200).json({
+      message: financialId ? 'Financial updated' : 'Financial assigned',
+      product,
+      detailId: detail._id,
+      financial,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to save barcode assignment', details: err.message });
+  }
+};
+
 const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const firstDetailImage = (details = []) => {
