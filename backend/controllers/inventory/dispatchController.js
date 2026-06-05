@@ -51,8 +51,31 @@ const sameMigrationText = (left, right) => {
   return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
 };
 
+const mongoProductCategoryMatchesCatalogItem = (product, item) => {
+  if (!product || !item) return false;
+
+  const catalogCategoryId = Number(item.category_id);
+  if (
+    Number.isFinite(catalogCategoryId) &&
+    catalogCategoryId > 0 &&
+    Number(product.catalogCategoryId) === catalogCategoryId
+  ) {
+    return true;
+  }
+
+  const catalogCategoryName =
+    item.category_name_english || item.category_name_tel || item.category_name || '';
+  return [
+    product.category,
+    product.categoryName,
+    product.category_name,
+  ].some((name) => sameMigrationText(name, catalogCategoryName));
+};
+
 const mongoProductMatchesCatalogItem = (product, item) => {
   if (!product || !item) return false;
+  if (!mongoProductCategoryMatchesCatalogItem(product, item)) return false;
+
   if (Number(product.catalogProductId) === Number(item.product_id)) return true;
 
   const catalogProductName = item.product_name_eng || item.product_name_tel || '';
@@ -63,6 +86,28 @@ const mongoProductMatchesCatalogItem = (product, item) => {
 
 const mongoFinancialMatchesCatalogBarcode = (financial, item) =>
   Boolean(item?.mk_barcode) && String(financial?.mk_barcode || '') === String(item.mk_barcode);
+
+const findExistingMongoProductForCatalogItem = async (item) => {
+  const catalogProductName = item.product_name_eng || item.product_name_tel || '';
+  const clauses = [];
+
+  if (Number(item?.product_id)) {
+    clauses.push({ catalogProductId: Number(item.product_id) });
+  }
+
+  if (catalogProductName) {
+    clauses.push(
+      { name: catalogProductName },
+      { productname: catalogProductName },
+      { englishname: catalogProductName }
+    );
+  }
+
+  if (!clauses.length) return null;
+
+  const candidates = await Product.find({ $or: clauses }).limit(50);
+  return candidates.find((candidate) => mongoProductMatchesCatalogItem(candidate, item)) || null;
+};
 
 const padMigrationBarcodePart = (value, size) => String(value || '').padStart(size, '0');
 
@@ -144,6 +189,14 @@ const makeCatalogMkBarcode = ({
     padCatalogBarcodePart(quantity, 3)
   );
 };
+
+const cleanPackingProductName = (value) =>
+  String(value || '')
+    .replace(/\b\d+(?:\.\d+)?\s*(kg|kgs|gms|gm|g)\s*(bag|pack|pkt|packet|sack)?\b/gi, '')
+    .replace(/\b(bag|pack|pkt|packet|sack)\b/gi, '')
+    .replace(/\s*-\s*$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 
 const toPackingConfigArray = (value, item = {}) => {
   if (!value) return [];
@@ -247,6 +300,7 @@ const normalizePackingConfigs = (item = {}) => {
         0
     ),
     unit_short_code: config.unit_short_code ?? config.unitShortCode ?? null,
+    product_name: cleanPackingProductName(config.product_name ?? config.productName ?? ''),
     source_pack_quantity: Number(
       config.source_pack_quantity ??
         config.sourcePackQuantity ??
@@ -641,9 +695,38 @@ const ensurePackingCatalogBarcodeAndRatePlan = async (
   );
 
   if (existingRatePlanResult.rows[0]) {
+    const updatedRatePlanResult = await client.query(
+      `
+      UPDATE catalog.rate_plans
+      SET
+        gst_rate = $3,
+        margin_percentage = $4,
+        labour_percentage = $5,
+        transport_percentage = $6,
+        load_percentage = $7,
+        unload_percentage = $8,
+        notes = COALESCE($9, notes),
+        updated_at = NOW()
+      WHERE id = $1
+        AND product_barcode_id = $2
+      RETURNING *
+      `,
+      [
+        Number(existingRatePlanResult.rows[0].id),
+        Number(config.product_barcode_id),
+        Number(config.gst_rate || 0),
+        Number(config.margin_percentage || 0),
+        Number(config.labour_percentage || 0),
+        Number(config.transport_percentage || 0),
+        Number(config.load_percentage || 0),
+        Number(config.unload_percentage || 0),
+        config.notes || null,
+      ]
+    );
+
     return applyRatePlanDefaults(
-      { ...config, rate_plan_id: Number(existingRatePlanResult.rows[0].id) },
-      new Map([[Number(existingRatePlanResult.rows[0].id), existingRatePlanResult.rows[0]]])
+      { ...config, rate_plan_id: Number(updatedRatePlanResult.rows[0].id) },
+      new Map([[Number(updatedRatePlanResult.rows[0].id), updatedRatePlanResult.rows[0]]])
     );
   }
 
@@ -780,7 +863,9 @@ const enrichPackingConfigWithCalculatedPrices = ({
     barcode: packingBarcode.barcode || packingBarcode.mk_barcode || null,
     mk_barcode: packingBarcode.mk_barcode || packingBarcode.barcode || null,
     product_code: packingBarcode.product_code,
-    product_name: packingBarcode.product_name_eng || packingBarcode.product_name_tel || null,
+    product_name:
+      cleanPackingProductName(packingConfig.product_name) ||
+      cleanPackingProductName(packingBarcode.product_name_eng || packingBarcode.product_name_tel),
     product_name_eng: packingBarcode.product_name_eng,
     product_name_tel: packingBarcode.product_name_tel,
     package_amount: getPositiveNumber(
@@ -2333,17 +2418,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
       }
 
       if (!product && forceNewMongoProduct) {
-        product = await Product.findOne({
-          catalogProductId: Number(item.product_id),
-          $or: [
-            { name: catalogProductName },
-            { productname: catalogProductName },
-            { englishname: catalogProductName },
-          ],
-        });
-        if (product && !mongoProductMatchesCatalogItem(product, item)) {
-          product = null;
-        }
+        product = await findExistingMongoProductForCatalogItem(item);
       }
 
       if (!product && !forceNewMongoProduct) {
@@ -2354,18 +2429,7 @@ export const receivedDispatchToOutletMongoStock = asyncHandler(async (req, res) 
           product = productByCatalogBarcode;
         }
         if (!product) {
-          product =
-            (await Product.findOne({ catalogProductId: Number(item.product_id) })) ||
-            (await Product.findOne({
-              $or: [
-                { name: catalogProductName },
-                { productname: catalogProductName },
-                { englishname: catalogProductName },
-              ],
-            }));
-        }
-        if (product && !mongoProductMatchesCatalogItem(product, item)) {
-          product = null;
+          product = await findExistingMongoProductForCatalogItem(item);
         }
       }
 
