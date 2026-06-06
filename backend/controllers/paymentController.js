@@ -13,6 +13,8 @@ dotenv.config();
 const publicKey = process.env.PUBLIC_KEY;
 const privateKey = process.env.PRIVATE_KEY;
 const PaymentUrl=process.env.PAYMENT_RETURN_URL;
+const PosPaymentReturnUrl =
+  process.env.POS_PAYMENT_RETURN_URL || 'https://pos-manakirana.web.app';
 
 // // Initialize Juspay
 // const baseUrl = process.env.ENVIRONMENT === 'production'
@@ -41,6 +43,23 @@ const juspay = new Juspay({
         privateKey,
     },
 });
+
+const getGatewayPaymentAmount = (order) => {
+  const isMulti = String(order?.paymentMethod || '').trim().toUpperCase() === 'MULTI';
+
+  if (!isMulti) {
+    return Number(order?.totalPrice || 0);
+  }
+
+  const upiAmount = (order.paymentBreakdown || []).reduce((sum, payment) => {
+    const channel = String(payment?.channel || '').toUpperCase();
+    const isUpiChannel = channel.includes('UPI') || channel.includes('QR');
+
+    return isUpiChannel ? sum + Number(payment?.amount || 0) : sum;
+  }, 0);
+
+  return upiAmount || Number(order?.totalPrice || 0);
+};
 
 
 
@@ -73,9 +92,9 @@ export const initiatePaymentAtDelivery = async (req, res) => {
       });
     }
 
-    const orderAmount = order.totalPrice;
+    const orderAmount = getGatewayPaymentAmount(order);
 
-    const dbAmount = parseFloat(order.totalPrice).toFixed(2);
+    const dbAmount = parseFloat(orderAmount).toFixed(2);
     const clientAmount = parseFloat(amount).toFixed(2);
 
     //  Amount Tampering Check
@@ -95,7 +114,7 @@ export const initiatePaymentAtDelivery = async (req, res) => {
 
     const sessionPayload = {
         order_id: order_id,
-        amount: orderAmount.toFixed(2),
+        amount: Number(orderAmount).toFixed(2),
         payment_page_client_id: process.env.PAYMENT_PAGE_CLIENT_ID,
         customer_id: customerId,
         action: 'paymentPage',
@@ -445,23 +464,25 @@ export const handlePaymentResponse = async (req, res) => {
     const orderStatus = statusResponse.status;
 
     const order = await Order.findById(orderId);
-     const amount = Number(order.totalPrice).toFixed(2);
 
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
-    if (Number(order.totalPrice).toFixed(2) !== Number(statusResponse.amount).toFixed(2)) {
+    const gatewayAmount = getGatewayPaymentAmount(order);
+    const amount = Number(order.totalPrice).toFixed(2);
+
+    if (Number(gatewayAmount).toFixed(2) !== Number(statusResponse.amount).toFixed(2)) {
       return res.status(400).json({
         success: false,
         message: 'Amount tampering detected. Payment rejected.',
       });
     }
 
- const posSuccess = `https://pos-manakirana.firebaseapp.com/payment/success?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
+ const posSuccess = `${PosPaymentReturnUrl}/payment/success?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
 
 // const posFailure = `https://pos-manakirana.firebaseapp.com/payment/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
-const posFailure =`https://pos-manakirana.firebaseapp.com/payment/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}&status=${orderStatus}&reason=${statusResponse.error_message}`;
+const posFailure =`${PosPaymentReturnUrl}/payment/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}&status=${orderStatus}&reason=${statusResponse.error_message}`;
 
     // const webSuccess = `https://www.manakirana.com/payment/success?orderId=${orderId}`;
     // const webFailure = `https://www.manakirana.com/payment/failure`;

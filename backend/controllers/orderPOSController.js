@@ -301,6 +301,7 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
     MK_order_id,
     posUserName,
     posLocation,
+    paymentBreakdown,
     remarks,
   } = req.body;
 
@@ -370,10 +371,15 @@ const addOrderItemsPOS = asyncHandler(async (req, res) => {
   const now = Date.now();
   const source = 'CASHIER';
 const normalizedPaymentMethod = String(paymentMethod || '').toUpperCase();
+const hasGatewayPayment = Array.isArray(paymentBreakdown) && paymentBreakdown.some((payment) => {
+  const channel = String(payment?.channel || '').toUpperCase();
+  return channel.includes('UPI') || channel.includes('QR');
+});
 
 // UPI must stay unpaid until HDFC callback confirms success
 const isPaid =
-  normalizedPaymentMethod === 'CASH' ;
+  normalizedPaymentMethod === 'CASH' ||
+  (normalizedPaymentMethod === 'MULTI' && !hasGatewayPayment);
 
 
   const {
@@ -387,6 +393,7 @@ const isPaid =
       user,
       shippingAddress,
       paymentMethod,
+      paymentBreakdown: Array.isArray(paymentBreakdown) ? paymentBreakdown : [],
       itemsPrice,
       shippingPrice,
       discountPercentage,
@@ -499,6 +506,7 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
       posLocation: order.posLocation || '',
           isPaid:order.isPaid||'',
     paymentMethod:order.paymentMethod||'',
+      paymentBreakdown: order.paymentBreakdown || [],
       source: order.source || '',
     }));
 
@@ -528,6 +536,7 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
     posLocation: order.posLocation || '',
         isPaid:order.isPaid||'',
     paymentMethod:order.paymentMethod||'',
+    paymentBreakdown: order.paymentBreakdown || [],
     source: order.source || '',
   }));
 
@@ -587,6 +596,7 @@ const getPOSOrderDetails = asyncHandler(async (req, res) => {
     posLocation: order.posLocation || '',
     isPaid:order.isPaid||'',
     paymentMethod:order.paymentMethod||'',
+    paymentBreakdown: order.paymentBreakdown || [],
     source: order.source || '',
     remarks: order.remarks || [],
     items,

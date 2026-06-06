@@ -82,6 +82,12 @@ const orderSchema = mongoose.Schema(
       type: String,
       required: true,
     },
+    paymentBreakdown: [
+      {
+        channel: { type: String, trim: true, required: true },
+        amount: { type: Number, required: true, min: 0 },
+      },
+    ],
     paymentResult: {
       id: { type: String },
       status: { type: String },
