@@ -250,8 +250,7 @@ financialIds.forEach(fid => {
     }
 
         // Generate return URL
-        const targetQuery = String(returnTarget || '').toLowerCase() === 'android' ? '?target=android' : '';
-        const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse${targetQuery}`;
+        const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse`;
 
         // Create Juspay order session
         const sessionResponse = await juspay.orderSession.create({
@@ -507,7 +506,8 @@ const webSuccess = `${PaymentUrl}/success?orderId=${orderId}`;
 const webFailure = `${PaymentUrl}/failure`;
 const appSuccess = `${AndroidPaymentReturnUrl}/success?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
 const appFailure = `${AndroidPaymentReturnUrl}/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}&status=${encodeURIComponent(orderStatus || '')}&reason=${encodeURIComponent(statusResponse.error_message || 'Payment failed')}`;
-    let redirectUrl = returnTarget === 'android'
+    const isAndroidReturn = returnTarget === 'android' || String(order?.source || '').toUpperCase() === 'ANDROID';
+    let redirectUrl = isAndroidReturn
       ? appFailure
       : order?.source === 'ONLINE' ? webFailure : posFailure;
 
@@ -523,7 +523,7 @@ const appFailure = `${AndroidPaymentReturnUrl}/failure?orderId=${encodeURICompon
 
       await order.save();
 
-      redirectUrl = returnTarget === 'android'
+      redirectUrl = isAndroidReturn
         ? appSuccess
         : order?.source === 'ONLINE' ? webSuccess : posSuccess;
     }
