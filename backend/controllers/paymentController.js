@@ -13,8 +13,10 @@ dotenv.config();
 const publicKey = process.env.PUBLIC_KEY;
 const privateKey = process.env.PRIVATE_KEY;
 const PaymentUrl=process.env.PAYMENT_RETURN_URL;
-const AndroidPaymentReturnUrl =
-  process.env.ANDROID_PAYMENT_RETURN_URL || 'https://www.manakirana.com/app/payment';
+const configuredAndroidPaymentReturnUrl = process.env.ANDROID_PAYMENT_RETURN_URL || '';
+const AndroidPaymentReturnUrl = configuredAndroidPaymentReturnUrl.startsWith('manakirana://')
+  ? configuredAndroidPaymentReturnUrl
+  : 'manakirana://payment';
 const PosPaymentReturnUrl =
   process.env.POS_PAYMENT_RETURN_URL || 'https://pos-manakirana.web.app';
 
@@ -250,7 +252,8 @@ financialIds.forEach(fid => {
     }
 
         // Generate return URL
-        const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse`;
+        const targetQuery = String(returnTarget || '').toLowerCase() === 'android' ? '?target=android' : '';
+        const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse${targetQuery}`;
 
         // Create Juspay order session
         const sessionResponse = await juspay.orderSession.create({
@@ -506,8 +509,7 @@ const webSuccess = `${PaymentUrl}/success?orderId=${orderId}`;
 const webFailure = `${PaymentUrl}/failure`;
 const appSuccess = `${AndroidPaymentReturnUrl}/success?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
 const appFailure = `${AndroidPaymentReturnUrl}/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}&status=${encodeURIComponent(orderStatus || '')}&reason=${encodeURIComponent(statusResponse.error_message || 'Payment failed')}`;
-    const isAndroidReturn = returnTarget === 'android' || String(order?.source || '').toUpperCase() === 'ANDROID';
-    let redirectUrl = isAndroidReturn
+    let redirectUrl = returnTarget === 'android'
       ? appFailure
       : order?.source === 'ONLINE' ? webFailure : posFailure;
 
@@ -523,7 +525,7 @@ const appFailure = `${AndroidPaymentReturnUrl}/failure?orderId=${encodeURICompon
 
       await order.save();
 
-      redirectUrl = isAndroidReturn
+      redirectUrl = returnTarget === 'android'
         ? appSuccess
         : order?.source === 'ONLINE' ? webSuccess : posSuccess;
     }
