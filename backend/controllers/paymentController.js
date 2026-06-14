@@ -13,6 +13,8 @@ dotenv.config();
 const publicKey = process.env.PUBLIC_KEY;
 const privateKey = process.env.PRIVATE_KEY;
 const PaymentUrl=process.env.PAYMENT_RETURN_URL;
+const AndroidPaymentReturnUrl =
+  process.env.ANDROID_PAYMENT_RETURN_URL || 'https://www.manakirana.com/app/payment';
 const PosPaymentReturnUrl =
   process.env.POS_PAYMENT_RETURN_URL || 'https://pos-manakirana.web.app';
 
@@ -503,8 +505,8 @@ const posFailure =`${PosPaymentReturnUrl}/payment/failure?orderId=${encodeURICom
     // const webFailure = `https://www.manakirana.com/payment/failure`;
 const webSuccess = `${PaymentUrl}/success?orderId=${orderId}`;
 const webFailure = `${PaymentUrl}/failure`;
-const appSuccess = `manakirana://payment/success?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
-const appFailure = `manakirana://payment/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}&status=${encodeURIComponent(orderStatus || '')}&reason=${encodeURIComponent(statusResponse.error_message || 'Payment failed')}`;
+const appSuccess = `${AndroidPaymentReturnUrl}/success?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
+const appFailure = `${AndroidPaymentReturnUrl}/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}&status=${encodeURIComponent(orderStatus || '')}&reason=${encodeURIComponent(statusResponse.error_message || 'Payment failed')}`;
     let redirectUrl = returnTarget === 'android'
       ? appFailure
       : order?.source === 'ONLINE' ? webFailure : posFailure;
