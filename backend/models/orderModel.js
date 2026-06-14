@@ -82,6 +82,11 @@ const orderSchema = mongoose.Schema(
       type: String,
       required: true,
     },
+    deliverySlot: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     paymentBreakdown: [
       {
         channel: { type: String, trim: true, required: true },

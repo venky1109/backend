@@ -153,6 +153,15 @@ export const initiatePayment = async (req, res) => {
     }
 
     try {
+        const order = order_id ? await Order.findById(order_id) : null;
+
+        if (order_id && !order) {
+            return res.status(404).json({
+                success: false,
+                message: 'Order not found for provided ID',
+            });
+        }
+
         // Fetch products from the database based on cart item product IDs
         const productIds = cartItems.map((item) => item.productId);
         const dbProducts = await Product.find({ _id: { $in: productIds } });
@@ -222,12 +231,16 @@ financialIds.forEach(fid => {
                 throw new Error(`Product not found for ID: ${cartItem.productId}`);
             }
         });
+        const expectedAmount = order
+            ? Number(order.totalPrice || 0)
+            : recalculatedAmount;
+
         // console.log('recalculatedAmount',recalculatedAmount)
         // console.log('amount'+amount)
         // const orderId = `${Date.now()}_${customerId}`;
           // Validate that recalculated amount matches the provided amount
-    if (recalculatedAmount.toFixed(2) !== parseFloat(amount).toFixed(2)) {
-        console.error(`Amount mismatch detected. Recalculated: ${recalculatedAmount}, Provided: ${amount}`);
+    if (expectedAmount.toFixed(2) !== parseFloat(amount).toFixed(2)) {
+        console.error(`Amount mismatch detected. Expected: ${expectedAmount}, Items: ${recalculatedAmount}, Shipping: ${order?.shippingPrice || 0}, Provided: ${amount}`);
         return res.status(400).json({
             success: false,
             message: 'Amount mismatch detected. Payment initiation aborted.',
@@ -240,7 +253,7 @@ financialIds.forEach(fid => {
         // Create Juspay order session
         const sessionResponse = await juspay.orderSession.create({
             order_id: order_id,
-            amount: recalculatedAmount.toFixed(2),
+            amount: expectedAmount.toFixed(2),
             payment_page_client_id: process.env.PAYMENT_PAGE_CLIENT_ID,
             customer_id: customerId,
             action: 'paymentPage',

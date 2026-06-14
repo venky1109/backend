@@ -7,7 +7,7 @@ function addDecimals(num) {
 // Our addDecimals function expects a number and returns a string, so it is not
 // correct to call it passing a string as the argument.
 
-export function calcPrices(orderItems) {
+export function calcPrices(orderItems, requestedShippingPrice = 0) {
   // Calculate the items price in whole number (pennies) to avoid issues with
   // floating point number calculations
   const itemsPrice = orderItems.reduce(
@@ -15,14 +15,15 @@ export function calcPrices(orderItems) {
     0
   );
 
-  // Calculate the shipping price
-  const shippingPrice = itemsPrice > 100 ? 0 : 0;
+  // Shipping can be decided by the client checkout rules, but product prices are
+  // still recalculated here from DB-trusted order items.
+  const shippingPrice = Number(requestedShippingPrice || 0);
 
   // Calculate the tax price
   // const taxPrice = 0.15 * itemsPrice;
 
   // Calculate the total price
-  const totalPrice = itemsPrice + shippingPrice ;
+  const totalPrice = itemsPrice + shippingPrice;
 
   // return prices as strings fixed to 2 decimal places
   return {

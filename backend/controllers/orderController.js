@@ -86,7 +86,7 @@ import { calcPrices } from '../utils/calcPrices.js';
 //   },
 // });
 const addOrderItems = asyncHandler(async (req, res) => {
-  const { orderItems, shippingAddress, paymentMethod,orderId } = req.body;
+  const { orderItems, shippingAddress, paymentMethod, deliverySlot = '', shippingPrice: requestedShippingPrice = 0, orderId } = req.body;
   // console.log('Request Body:', shippingAddress);
 
 
@@ -147,7 +147,7 @@ const addOrderItems = asyncHandler(async (req, res) => {
       };
     }
     // Calculate prices (ensure you have this function defined)
-    const { itemsPrice, shippingPrice, totalPrice } = calcPrices(dbOrderItems);
+    const { itemsPrice, shippingPrice, totalPrice } = calcPrices(dbOrderItems, requestedShippingPrice);
     const source = 'ONLINE';
 
 
@@ -157,6 +157,7 @@ const addOrderItems = asyncHandler(async (req, res) => {
       user: req.user._id,
       shippingAddress,
       paymentMethod,
+      deliverySlot,
       itemsPrice,
       shippingPrice,
       totalPrice,
