@@ -143,7 +143,7 @@ export const initiatePaymentAtDelivery = async (req, res) => {
 export const initiatePayment = async (req, res) => {
     // console.log('Request body:', req.body);
 
-    const { amount, customerId, cartItems,order_id } = req.body;
+    const { amount, customerId, cartItems,order_id, returnTarget } = req.body;
 
     if (!amount || !customerId || !cartItems || !cartItems.length) {
         return res.status(400).json({
@@ -248,7 +248,8 @@ financialIds.forEach(fid => {
     }
 
         // Generate return URL
-        const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse`;
+        const targetQuery = String(returnTarget || '').toLowerCase() === 'android' ? '?target=android' : '';
+        const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse${targetQuery}`;
 
         // Create Juspay order session
         const sessionResponse = await juspay.orderSession.create({
@@ -465,7 +466,8 @@ export const retryPaymentForExistingOrder = async (req, res) => {
   }
 };
 export const handlePaymentResponse = async (req, res) => {
-  const orderId = req.body.order_id || req.body.orderId;
+  const orderId = req.body.order_id || req.body.orderId || req.query.order_id || req.query.orderId;
+  const returnTarget = String(req.query.target || req.body.target || '').toLowerCase();
 //   const amount=req.body.amount;
 
   if (!orderId) {
@@ -501,7 +503,11 @@ const posFailure =`${PosPaymentReturnUrl}/payment/failure?orderId=${encodeURICom
     // const webFailure = `https://www.manakirana.com/payment/failure`;
 const webSuccess = `${PaymentUrl}/success?orderId=${orderId}`;
 const webFailure = `${PaymentUrl}/failure`;
-    let redirectUrl = order?.source === 'ONLINE' ? webFailure : posFailure;
+const appSuccess = `manakirana://payment/success?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
+const appFailure = `manakirana://payment/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}&status=${encodeURIComponent(orderStatus || '')}&reason=${encodeURIComponent(statusResponse.error_message || 'Payment failed')}`;
+    let redirectUrl = returnTarget === 'android'
+      ? appFailure
+      : order?.source === 'ONLINE' ? webFailure : posFailure;
 
     if (orderStatus === 'CHARGED') {
       order.isPaid = true;
@@ -515,7 +521,9 @@ const webFailure = `${PaymentUrl}/failure`;
 
       await order.save();
 
-      redirectUrl = order?.source === 'ONLINE' ? webSuccess : posSuccess;
+      redirectUrl = returnTarget === 'android'
+        ? appSuccess
+        : order?.source === 'ONLINE' ? webSuccess : posSuccess;
     }
 
     return res.redirect(redirectUrl);
