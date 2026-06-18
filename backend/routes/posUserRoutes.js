@@ -7,7 +7,8 @@ import {
   deletePosUser,
   setPosUserBalance,
   getPosUserBalance,
-  getPosUserRoleByUsername
+  getPosUserRoleByUsername,
+  getLoginLocations
 } from '../controllers/posUserController.js';
 
 import {
@@ -20,6 +21,7 @@ import {
 const router = express.Router();
 
 router.post('/login', loginPosUser);
+router.get('/login-locations', getLoginLocations);
 router.post('/', protectPOS, isAdminOrProp, registerPosUser);
 router.get('/', protectPOS, posUserReadAccess, getPosUsers);
 router.get('/role/:username', getPosUserRoleByUsername);

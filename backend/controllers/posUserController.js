@@ -1,5 +1,6 @@
 import PosUser from '../models/PosUserModel.js';
 import generateTokenPos from '../utils/generateTokenPos.js';
+import { query as pgQuery } from '../config/pg.js';
 
 const normalizeRole = (role) => String(role || '').trim().toUpperCase();
 
@@ -100,6 +101,40 @@ export const getPosUserRoleByUsername = async (req, res) => {
   }
 
   res.json({ role: user.role });
+};
+
+export const getLoginLocations = async (_req, res) => {
+  try {
+    const userLocations = await PosUser.distinct('location', {
+      location: { $exists: true, $nin: [null, ''] },
+    });
+
+    const catalogLocations = await pgQuery(
+      `
+      SELECT outlet_name AS location
+      FROM catalog.outlets
+      WHERE outlet_name IS NOT NULL
+      UNION
+      SELECT warehouse_name AS location
+      FROM catalog.warehouses
+      WHERE warehouse_name IS NOT NULL
+      ORDER BY location ASC
+      `
+    ).catch(() => ({ rows: [] }));
+
+    const locations = [...userLocations, ...catalogLocations.rows.map((row) => row.location)]
+      .map((location) => String(location || '').trim())
+      .filter(Boolean)
+      .filter((location, index, list) =>
+        list.findIndex((item) => item.toLowerCase() === location.toLowerCase()) === index
+      )
+      .sort((a, b) => a.localeCompare(b));
+
+    res.json({ locations });
+  } catch (error) {
+    console.error('Failed to fetch login locations:', error);
+    res.status(500).json({ message: 'Failed to fetch login locations' });
+  }
 };
 
 // @desc    Update POS user
