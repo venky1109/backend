@@ -131,19 +131,29 @@ const getProducts = asyncHandler(async (req, res) => {
     : defaultPageSize;
   const page = Number(req.query.pageNumber) || 1;
 
-  const keyword = req.query.keyword
+  const searchText = String(req.query.keyword || '').trim();
+  const numericSearch = Number(searchText);
+  const keyword = searchText
     ? {
-        $or:[ { name: {
-          $regex: req.query.keyword,
-          $options: 'i',
-        }} ,
-        {category: { $regex: req.query.keyword, $options: 'i', }},
-        {productname: { $regex: req.query.keyword, $options: 'i', }},
-        {englishname: { $regex: req.query.keyword, $options: 'i', }},
-        {teluguname: { $regex: req.query.keyword, $options: 'i', }},
-        {hsncode: { $regex: req.query.keyword, $options: 'i', }},
-        {'details.brand': {$regex:req.query.keyword,$options: 'i', }},
-      ],
+        $or: [
+          { name: { $regex: searchText, $options: 'i' } },
+          { category: { $regex: searchText, $options: 'i' } },
+          { productname: { $regex: searchText, $options: 'i' } },
+          { englishname: { $regex: searchText, $options: 'i' } },
+          { teluguname: { $regex: searchText, $options: 'i' } },
+          { hsncode: { $regex: searchText, $options: 'i' } },
+          { 'details.brand': { $regex: searchText, $options: 'i' } },
+          { 'details.financials.mk_barcode': searchText },
+          { 'details.financials.barcode': { $in: [searchText] } },
+          ...(Number.isFinite(numericSearch)
+            ? [
+                { catalogProductId: numericSearch },
+                { 'details.financials.catalogProductBarcodeId': numericSearch },
+                { 'details.financials.product_barcode_id': numericSearch },
+                { 'details.financials.mkid': numericSearch },
+              ]
+            : []),
+        ],
       }
     : {};
 
