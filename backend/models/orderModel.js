@@ -169,7 +169,7 @@ const orderSchema = mongoose.Schema(
 
     source: {
       type: String,
-      enum: ['CASHIER', 'ONLINE'],
+      enum: ['CASHIER', 'ONLINE', 'ANDROID'],
       required: true,
       default: 'ONLINE',
     },

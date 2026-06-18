@@ -148,7 +148,8 @@ const addOrderItems = asyncHandler(async (req, res) => {
     }
     // Calculate prices (ensure you have this function defined)
     const { itemsPrice, shippingPrice, totalPrice } = calcPrices(dbOrderItems, requestedShippingPrice);
-    const source = 'ONLINE';
+    const requestedSource = String(req.body.source || '').trim().toUpperCase();
+    const source = requestedSource === 'ANDROID' ? 'ANDROID' : 'ONLINE';
 
 
     // Create and save the new order

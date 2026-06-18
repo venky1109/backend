@@ -509,9 +509,10 @@ const webSuccess = `${PaymentUrl}/success?orderId=${orderId}`;
 const webFailure = `${PaymentUrl}/failure`;
 const appSuccess = `${AndroidPaymentReturnUrl}/success?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}`;
 const appFailure = `${AndroidPaymentReturnUrl}/failure?orderId=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}&status=${encodeURIComponent(orderStatus || '')}&reason=${encodeURIComponent(statusResponse.error_message || 'Payment failed')}`;
+const isCustomerOnlineOrder = ['ONLINE', 'ANDROID'].includes(String(order?.source || '').toUpperCase());
     let redirectUrl = returnTarget === 'android'
       ? appFailure
-      : order?.source === 'ONLINE' ? webFailure : posFailure;
+      : isCustomerOnlineOrder ? webFailure : posFailure;
 
     if (orderStatus === 'CHARGED') {
       order.isPaid = true;
@@ -527,7 +528,7 @@ const appFailure = `${AndroidPaymentReturnUrl}/failure?orderId=${encodeURICompon
 
       redirectUrl = returnTarget === 'android'
         ? appSuccess
-        : order?.source === 'ONLINE' ? webSuccess : posSuccess;
+        : isCustomerOnlineOrder ? webSuccess : posSuccess;
     }
 
     return res.redirect(redirectUrl);

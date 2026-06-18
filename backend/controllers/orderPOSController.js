@@ -263,7 +263,7 @@ const buildPOSAccessFilter = (loggedInUser) => {
 
 // ONLINE orders helper, kept separately if needed elsewhere
 const buildOnlineAccessFilter = (loggedInUser) => {
-  const base = { source: 'ONLINE' };
+  const base = { source: { $in: ['ONLINE', 'ANDROID'] } };
 
   if (!loggedInUser) return base;
 
