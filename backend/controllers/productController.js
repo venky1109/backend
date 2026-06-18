@@ -7,9 +7,17 @@ const findMatchingFinancialByBarcode = (product, barcode) => {
   const barcodeToFind = String(barcode);
 
   for (const detail of product.details || []) {
-    const financial = detail.financials?.find((item) =>
-      (item.barcode || []).some((code) => String(code) === barcodeToFind)
-    );
+    const financial = detail.financials?.find((item) => {
+      const barcodes = [
+        item.mk_barcode,
+        item.catalogProductBarcodeId,
+        item.product_barcode_id,
+        item.mkid,
+        ...(Array.isArray(item.barcode) ? item.barcode : [item.barcode]),
+      ].filter((code) => code !== undefined && code !== null);
+
+      return barcodes.some((code) => String(code) === barcodeToFind);
+    });
 
     if (financial) {
       return { detail, financial };
@@ -289,6 +297,41 @@ const getProductBySlug = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error("Product not found");
   }
+});
+
+// @desc    Fetch single product by barcode
+// @route   GET /api/products/barcode/:barcode
+// @access  Public
+const getProductByBarcode = asyncHandler(async (req, res) => {
+  const barcodeToFind = String(req.params.barcode || '').trim().split(',')[0];
+  if (!barcodeToFind) {
+    res.status(400);
+    throw new Error('Barcode is required');
+  }
+
+  const catalogBarcodeId = Number(barcodeToFind);
+  const barcodeQuery = [
+    { 'details.financials.mk_barcode': barcodeToFind },
+    { 'details.financials.barcode': { $in: [barcodeToFind] } },
+  ];
+
+  if (Number.isFinite(catalogBarcodeId)) {
+    barcodeQuery.push(
+      { 'details.financials.catalogProductBarcodeId': catalogBarcodeId },
+      { 'details.financials.product_barcode_id': catalogBarcodeId },
+      { 'details.financials.mkid': catalogBarcodeId }
+    );
+  }
+
+  const product = await Product.findOne({ $or: barcodeQuery });
+
+  if (!product) {
+    res.status(404);
+    throw new Error('Product not found for barcode');
+  }
+
+  const match = findMatchingFinancialByBarcode(product, barcodeToFind);
+  res.json(await productWithMatchMeta(product, match));
 });
 
 
@@ -946,6 +989,7 @@ export {
   getProducts,
   getCategories,
   getProductBySlug,
+  getProductByBarcode,
   createProduct,
   createProductDetail,
   createFinancialDetail,

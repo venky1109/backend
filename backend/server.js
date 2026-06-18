@@ -1,4 +1,5 @@
 import path from 'path';
+import fs from 'fs';
 import express from 'express';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
@@ -187,15 +188,23 @@ app.get('/api/config/paypal', (req, res) =>
   res.send({ clientId: process.env.PAYPAL_CLIENT_ID })
 );
 
+app.use('/api', (req, res) => {
+  res.status(404).json({ message: `API route not found: ${req.originalUrl}` });
+});
+
 const __dirname = path.resolve();
 const uploadRoot = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
 
 if (env === 'production') {
   app.use('/uploads', express.static(uploadRoot)); 
   app.use(express.static(path.join(__dirname, '/frontend/build')));
-  app.get('*', (req, res) =>
-    res.sendFile(path.resolve(__dirname, 'frontend', 'build', 'index.html'))
-  );
+  app.get('*', (req, res) => {
+    const indexPath = path.resolve(__dirname, 'frontend', 'build', 'index.html');
+    if (fs.existsSync(indexPath)) {
+      return res.sendFile(indexPath);
+    }
+    return res.status(200).send('API is running....');
+  });
 } else {
   app.use('/uploads', express.static(uploadRoot));
   app.get('/', (req, res) => {

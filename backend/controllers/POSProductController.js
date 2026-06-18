@@ -1,6 +1,7 @@
 
 import Product from '../models/productModel.js';
 import mongoose from 'mongoose';
+import { query as pgQuery } from '../config/pg.js';
 
 export const createPOSProductFromCatalog = async (req, res) => {
   try {
@@ -109,6 +110,576 @@ export const updatePOSProductFinancial = async (req, res) => {
 const sameText = (left, right) =>
   String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase();
 
+const numberOrBlank = (value) => {
+  if (value === undefined || value === null || Number.isNaN(Number(value))) return '';
+  return String(value);
+};
+
+const textOrBlank = (value) => String(value || '').trim();
+
+const makeCatalogCode = (prefix, value) => {
+  const compact = textOrBlank(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 36);
+  return `${prefix}_${compact || Date.now()}`;
+};
+
+const findOrCreateCatalogCategory = async (categoryName) => {
+  const name = textOrBlank(categoryName) || 'Migration';
+  const existing = await pgQuery(
+    `
+    SELECT *
+    FROM catalog.categories
+    WHERE lower(trim(category_name_english)) = lower(trim($1))
+       OR lower(trim(category_name_telugu)) = lower(trim($1))
+    ORDER BY id ASC
+    LIMIT 1
+    `,
+    [name]
+  );
+  if (existing.rows[0]) return existing.rows[0];
+
+  const inserted = await pgQuery(
+    `
+    INSERT INTO catalog.categories (category_code, category_name_english, category_name_telugu)
+    VALUES ($1, $2, $3)
+    RETURNING *
+    `,
+    [makeCatalogCode('CAT', name), name, name]
+  );
+  return inserted.rows[0];
+};
+
+const findOrCreateCatalogBrand = async (brandName) => {
+  const name = textOrBlank(brandName) || 'Migration';
+  const existing = await pgQuery(
+    `
+    SELECT *
+    FROM catalog.brands
+    WHERE lower(trim(brand_name_english)) = lower(trim($1))
+       OR lower(trim(brand_name_telugu)) = lower(trim($1))
+    ORDER BY id ASC
+    LIMIT 1
+    `,
+    [name]
+  );
+  if (existing.rows[0]) return existing.rows[0];
+
+  const inserted = await pgQuery(
+    `
+    INSERT INTO catalog.brands (brand_code, brand_name_english, brand_name_telugu)
+    VALUES ($1, $2, $3)
+    RETURNING *
+    `,
+    [makeCatalogCode('BR', name), name, name]
+  );
+  return inserted.rows[0];
+};
+
+const findOrCreateCatalogUnit = async (unitValue) => {
+  const unit = textOrBlank(unitValue) || 'QTY';
+  const existing = await pgQuery(
+    `
+    SELECT *
+    FROM catalog.units
+    WHERE lower(trim(unit_short_code)) = lower(trim($1))
+       OR lower(trim(unit_name)) = lower(trim($1))
+    ORDER BY id ASC
+    LIMIT 1
+    `,
+    [unit]
+  );
+  if (existing.rows[0]) return existing.rows[0];
+
+  const inserted = await pgQuery(
+    `
+    INSERT INTO catalog.units (unit_code, unit_name, unit_short_code)
+    VALUES ($1, $2, $3)
+    RETURNING *
+    `,
+    [makeCatalogCode('UNIT', unit), unit, unit]
+  );
+  return inserted.rows[0];
+};
+
+const findOrCreateCatalogProduct = async (productData, categoryRow) => {
+  const name = textOrBlank(productData.name || productData.productname || productData.englishname);
+  const productName = name || 'Migration Product';
+  const existing = await pgQuery(
+    `
+    SELECT *
+    FROM catalog.products
+    WHERE lower(trim(product_name_eng)) = lower(trim($1))
+       OR lower(trim(product_name_tel)) = lower(trim($1))
+    ORDER BY id ASC
+    LIMIT 1
+    `,
+    [productName]
+  );
+  if (existing.rows[0]) return existing.rows[0];
+
+  const inserted = await pgQuery(
+    `
+    INSERT INTO catalog.products
+      (product_code, product_name_eng, product_name_tel, hsncode, gst_rate)
+    VALUES
+      ($1, $2, $3, $4, $5)
+    RETURNING *
+    `,
+    [
+      makeCatalogCode('PRD', productName),
+      productName,
+      textOrBlank(productData.teluguname) || productName,
+      textOrBlank(productData.hsncode || productData.hsn),
+      Number(productData.gst || categoryRow?.gst_rate || 0),
+    ]
+  );
+  return inserted.rows[0];
+};
+
+const ensureCatalogBarcodeForAssignment = async ({
+  productData,
+  detailData,
+  financialData,
+  cleanBarcode,
+}) => {
+  if (financialData.catalogProductBarcodeId) {
+    return {
+      productId: productData.catalogProductId,
+      categoryId: productData.catalogCategoryId,
+      brandId: detailData.catalogBrandId,
+      barcodeId: financialData.catalogProductBarcodeId,
+    };
+  }
+
+  const category = await findOrCreateCatalogCategory(productData.category);
+  const product = await findOrCreateCatalogProduct(productData, category);
+  const brand = await findOrCreateCatalogBrand(detailData.brand);
+  const unit = await findOrCreateCatalogUnit(financialData.units);
+  const vendorBarcode = cleanBarcode.find((item) => item !== String(financialData.mk_barcode)) || cleanBarcode[0] || null;
+
+  const existing = await pgQuery(
+    `
+    SELECT *
+    FROM catalog.product_barcodes
+    WHERE product_id = $1
+      AND brand_id = $2
+      AND category_id = $3
+      AND unit_id = $4
+      AND quantity = $5
+    ORDER BY id ASC
+    LIMIT 1
+    `,
+    [
+      Number(product.id),
+      Number(brand.id),
+      Number(category.id),
+      Number(unit.id),
+      Number(financialData.quantity || 0),
+    ]
+  );
+
+  let barcode = existing.rows[0];
+  if (barcode) {
+    const updated = await pgQuery(
+      `
+      UPDATE catalog.product_barcodes
+      SET
+        barcode = COALESCE($2, barcode),
+        mk_barcode = COALESCE($3, mk_barcode),
+        image_url = COALESCE($4, image_url),
+        is_active = TRUE,
+        updated_at = now()
+      WHERE id = $1
+      RETURNING *
+      `,
+      [barcode.id, vendorBarcode, financialData.mk_barcode || null, detailData.image || null]
+    );
+    barcode = updated.rows[0];
+  } else {
+    const inserted = await pgQuery(
+      `
+      INSERT INTO catalog.product_barcodes
+        (product_id, brand_id, category_id, unit_id, quantity, barcode, mk_barcode, image_url)
+      VALUES
+        ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING *
+      `,
+      [
+        Number(product.id),
+        Number(brand.id),
+        Number(category.id),
+        Number(unit.id),
+        Number(financialData.quantity || 0),
+        vendorBarcode,
+        financialData.mk_barcode ? String(financialData.mk_barcode) : null,
+        detailData.image || null,
+      ]
+    );
+    barcode = inserted.rows[0];
+  }
+
+  await pgQuery(
+    `
+    UPDATE catalog.rate_plans
+    SET gst_rate = $2, updated_at = now()
+    WHERE product_barcode_id = $1
+      AND lower(rate_for) = 'customer'
+    `,
+    [barcode.id, Number(productData.gst || 0)]
+  );
+
+  await pgQuery(
+    `
+    INSERT INTO catalog.rate_plans (product_barcode_id, rate_for, gst_rate)
+    SELECT $1, 'customer', $2
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM catalog.rate_plans
+      WHERE product_barcode_id = $1
+        AND lower(rate_for) = 'customer'
+    )
+    `,
+    [barcode.id, Number(productData.gst || 0)]
+  );
+
+  return {
+    productId: product.id,
+    categoryId: category.id,
+    brandId: brand.id,
+    barcodeId: barcode.id,
+  };
+};
+
+const mapCatalogAssignerRow = (row) => {
+  const mrp = row.mrp_amount ?? row.price ?? row.expected_unit_price ?? '';
+  const dprice = row.selling_price ?? row.dprice ?? row.expected_unit_price ?? mrp;
+
+  return {
+    source: 'catalog',
+    id: row.id,
+    productBarcodeId: row.id,
+    catalogProductBarcodeId: row.id,
+    mkid: row.id,
+    mk_barcode: row.mk_barcode || '',
+    barcode: row.barcode || '',
+    productName: row.product_name_eng || row.product_name_tel || '',
+    category: row.category_name_english || row.category_name_telugu || '',
+    brand: row.brand_name_english || row.brand_name_telugu || '',
+    description: row.description || '',
+    hsncode: row.hsncode || '',
+    gst: row.gst_rate ?? row.rate_gst_rate ?? 0,
+    imageUrl: row.image_url || '',
+    catalogProductId: row.product_id,
+    catalogCategoryId: row.category_id,
+    catalogBrandId: row.brand_id,
+    unitId: row.unit_id,
+    units: row.unit_short_code || row.unit_name || 'QTY',
+    quantity: row.quantity ?? '',
+    countInStock: row.count_in_stock ?? row.countInStock ?? '',
+    price: mrp,
+    dprice,
+    mfg_date: row.mfg_date || '',
+    exp_date: row.exp_date || '',
+  };
+};
+
+const findCatalogAssignerMatches = async ({ mode, q }) => {
+  const normalized = textOrBlank(q);
+  if (!normalized) return [];
+
+  const byBarcode = mode === 'barcode';
+  const values = byBarcode
+    ? [normalized]
+    : [`%${normalized.toLowerCase()}%`];
+  const where = byBarcode
+    ? `(pb.mk_barcode = $1 OR pb.barcode = $1)`
+    : `(
+        lower(p.product_name_eng) LIKE $1
+        OR lower(p.product_name_tel) LIKE $1
+        OR lower(b.brand_name_english) LIKE $1
+        OR lower(c.category_name_english) LIKE $1
+      )`;
+
+  const { rows } = await pgQuery(
+    `
+    SELECT
+      pb.*,
+      p.product_name_eng,
+      p.product_name_tel,
+      p.product_code,
+      p.hsncode,
+      p.gst_rate,
+      b.brand_name_english,
+      b.brand_name_telugu,
+      c.category_name_english,
+      c.category_name_telugu,
+      u.unit_name,
+      u.unit_short_code,
+      rp.gst_rate AS rate_gst_rate,
+      rp.notes AS rate_plan_notes
+    FROM catalog.product_barcodes pb
+    LEFT JOIN catalog.products p ON p.id = pb.product_id
+    LEFT JOIN catalog.brands b ON b.id = pb.brand_id
+    LEFT JOIN catalog.categories c ON c.id = pb.category_id
+    LEFT JOIN catalog.units u ON u.id = pb.unit_id
+    LEFT JOIN catalog.rate_plans rp
+      ON rp.product_barcode_id = pb.id
+      AND lower(rp.rate_for) = 'customer'
+    WHERE ${where}
+    ORDER BY
+      CASE
+        WHEN pb.barcode = $1 THEN 0
+        WHEN pb.mk_barcode = $1 THEN 1
+        ELSE 2
+      END,
+      pb.id DESC
+    LIMIT 20
+    `,
+    values
+  );
+
+  return rows.map(mapCatalogAssignerRow);
+};
+
+export const getBarcodeAssignerCatalogBarcodeById = async (req, res) => {
+  try {
+    const id = Number(req.params.catalogProductBarcodeId || req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ error: 'Valid catalog product barcode ID is required' });
+    }
+
+    const { rows } = await pgQuery(
+      `
+      SELECT
+        pb.*,
+        p.product_name_eng,
+        p.product_name_tel,
+        p.product_code,
+        p.hsncode,
+        p.gst_rate,
+        b.brand_name_english,
+        b.brand_name_telugu,
+        c.category_name_english,
+        c.category_name_telugu,
+        u.unit_name,
+        u.unit_short_code,
+        rp.gst_rate AS rate_gst_rate,
+        rp.notes AS rate_plan_notes
+      FROM catalog.product_barcodes pb
+      LEFT JOIN catalog.products p ON p.id = pb.product_id
+      LEFT JOIN catalog.brands b ON b.id = pb.brand_id
+      LEFT JOIN catalog.categories c ON c.id = pb.category_id
+      LEFT JOIN catalog.units u ON u.id = pb.unit_id
+      LEFT JOIN catalog.rate_plans rp
+        ON rp.product_barcode_id = pb.id
+        AND lower(rp.rate_for) = 'customer'
+      WHERE pb.id = $1
+      LIMIT 1
+      `,
+      [id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Catalog product barcode row not found' });
+    }
+
+    return res.json({
+      source: 'catalog',
+      assignment: mapCatalogAssignerRow(rows[0]),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch catalog product barcode', details: err.message });
+  }
+};
+
+const firstFinancial = (product, predicate) => {
+  for (const detail of product.details || []) {
+    for (const financial of detail.financials || []) {
+      if (!predicate || predicate(financial, detail)) {
+        return { detail, financial };
+      }
+    }
+  }
+
+  return null;
+};
+
+const mapMongoAssignerMatch = ({ product, detail, financial, matchedBarcode = '' }) => ({
+  source: 'mongo',
+  id: product._id,
+  productId: product._id,
+  detailId: detail?._id,
+  financialId: financial?._id,
+  catalogProductId: product.catalogProductId || '',
+  catalogCategoryId: product.catalogCategoryId || '',
+  catalogBrandId: detail?.catalogBrandId || '',
+  catalogProductBarcodeId: financial?.catalogProductBarcodeId || financial?.product_barcode_id || '',
+  productBarcodeId: financial?.product_barcode_id || financial?.catalogProductBarcodeId || '',
+  mkid: financial?.catalogProductBarcodeId || financial?.mkid || '',
+  mk_barcode: financial?.mk_barcode || '',
+  barcode: (financial?.barcode || []).join(', ') || matchedBarcode,
+  productName: product.name || product.productname || product.englishname || '',
+  category: product.category || '',
+  brand: detail?.brand || '',
+  description: detail?.description || '',
+  units: financial?.units || 'QTY',
+  quantity: numberOrBlank(financial?.quantity),
+  countInStock: numberOrBlank(financial?.countInStock),
+  price: numberOrBlank(financial?.price),
+  dprice: numberOrBlank(financial?.dprice),
+  mfg_date: financial?.mfg_date || '',
+  exp_date: financial?.exp_date || '',
+});
+
+const findMongoAssignerMatches = async ({ mode, q }) => {
+  const normalized = textOrBlank(q);
+  if (!normalized) return [];
+
+  if (mode === 'barcode') {
+    const product = await Product.findOne({
+      $or: [
+        { 'details.financials.barcode': normalized },
+        { 'details.financials.mk_barcode': normalized },
+      ],
+    }).limit(1);
+
+    if (!product) return [];
+
+    const found = firstFinancial(product, (financial) =>
+      String(financial.mk_barcode || '') === normalized ||
+      (financial.barcode || []).map(String).includes(normalized)
+    );
+
+    return found ? [mapMongoAssignerMatch({ product, ...found, matchedBarcode: normalized })] : [];
+  }
+
+  const matcher = new RegExp(escapeRegex(normalized), 'i');
+  const products = await Product.find({
+    $or: [
+      { name: matcher },
+      { productname: matcher },
+      { englishname: matcher },
+      { category: matcher },
+      { 'details.brand': matcher },
+    ],
+  }).limit(20);
+
+  return products
+    .map((product) => {
+      const found = firstFinancial(product);
+      return found ? mapMongoAssignerMatch({ product, ...found }) : null;
+    })
+    .filter(Boolean);
+};
+
+export const lookupBarcodeAssignerProduct = async (req, res) => {
+  try {
+    const mode = req.query.mode === 'name' ? 'name' : 'barcode';
+    const q = textOrBlank(req.query.q || req.query.barcode || req.query.name);
+
+    if (!q) {
+      return res.status(400).json({ error: 'Search value is required' });
+    }
+
+    const catalogMatches = await findCatalogAssignerMatches({ mode, q });
+    if (catalogMatches.length) {
+      return res.json({
+        source: 'catalog',
+        matches: catalogMatches,
+        assignment: catalogMatches[0],
+      });
+    }
+
+    const mongoMatches = await findMongoAssignerMatches({ mode, q });
+    if (mongoMatches.length) {
+      return res.json({
+        source: 'mongo',
+        matches: mongoMatches,
+        assignment: mongoMatches[0],
+      });
+    }
+
+    return res.status(404).json({
+      source: 'none',
+      matches: [],
+      assignment: {
+        source: 'none',
+        barcode: mode === 'barcode' ? q : '',
+        productName: mode === 'name' ? q : '',
+      },
+      message: 'Product not found in catalog or Mongo',
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to lookup barcode assignment product', details: err.message });
+  }
+};
+
+const compactParts = (...values) =>
+  values
+    .map((value) => textOrBlank(value))
+    .filter(Boolean);
+
+const makeSuggestionLabel = (item) => {
+  const name = item.productName || 'Unnamed product';
+  const brand = item.brand ? ` - ${item.brand}` : '';
+  const pack = compactParts(item.quantity, item.units).join(' ');
+  const barcode = item.barcode || item.mk_barcode;
+  return compactParts(
+    `${name}${brand}`,
+    item.category,
+    pack,
+    barcode ? `Barcode ${barcode}` : '',
+    item.mk_barcode ? `MK ${item.mk_barcode}` : ''
+  ).join(' | ');
+};
+
+export const getBarcodeAssignerNameSuggestions = async (req, res) => {
+  try {
+    const q = textOrBlank(req.query.q || req.query.name);
+
+    if (!q || q.length < 2) {
+      return res.json({ suggestions: [] });
+    }
+
+    const [catalogMatches, mongoMatches] = await Promise.all([
+      findCatalogAssignerMatches({ mode: 'name', q }),
+      findMongoAssignerMatches({ mode: 'name', q }),
+    ]);
+
+    const seen = new Set();
+    const suggestions = [...catalogMatches, ...mongoMatches]
+      .map((item) => ({
+        ...item,
+        label: makeSuggestionLabel(item),
+      }))
+      .filter((item) => {
+        const key = [
+          item.source,
+          item.catalogProductBarcodeId || item.productBarcodeId || item.financialId || '',
+          item.productName,
+          item.brand,
+          item.quantity,
+          item.units,
+        ].join('|').toLowerCase();
+
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 30);
+
+    return res.json({ suggestions });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to get barcode assigner suggestions', details: err.message });
+  }
+};
+
 export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
   try {
     const {
@@ -122,6 +693,27 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
 
     if (!financialData?.mk_barcode) {
       return res.status(400).json({ error: 'MK barcode is required' });
+    }
+
+    const cleanBarcode = Array.isArray(financialData.barcode)
+      ? financialData.barcode.filter(Boolean).map(String)
+      : financialData.barcode
+        ? [String(financialData.barcode)]
+        : [];
+
+    if (!financialData.catalogProductBarcodeId) {
+      const catalogIds = await ensureCatalogBarcodeForAssignment({
+        productData,
+        detailData,
+        financialData,
+        cleanBarcode,
+      });
+
+      productData.catalogProductId = productData.catalogProductId || catalogIds.productId;
+      productData.catalogCategoryId = productData.catalogCategoryId || catalogIds.categoryId;
+      detailData.catalogBrandId = detailData.catalogBrandId || catalogIds.brandId;
+      financialData.catalogProductBarcodeId = catalogIds.barcodeId;
+      financialData.product_barcode_id = financialData.product_barcode_id || catalogIds.barcodeId;
     }
 
     let product = productId ? await Product.findById(productId) : null;
@@ -158,7 +750,7 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
         productname: productData.productname || productData.name || productData.englishname,
         englishname: productData.englishname || productData.name || '',
         teluguname: productData.teluguname || '',
-        hsncode: productData.hsncode || '',
+        hsncode: productData.hsncode || productData.hsn || '',
         gst: Number(productData.gst || 0),
         category: productData.category || 'Migration',
         details: [],
@@ -174,7 +766,7 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
       product.productname = productData.productname || product.productname || product.name;
       product.englishname = productData.englishname || product.englishname || product.name;
       product.teluguname = productData.teluguname || product.teluguname;
-      product.hsncode = productData.hsncode || product.hsncode;
+      product.hsncode = productData.hsncode || productData.hsn || product.hsncode;
       product.gst = productData.gst !== undefined && productData.gst !== null ? Number(productData.gst) : product.gst;
       product.category = productData.category || product.category;
     }
@@ -216,12 +808,6 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
       (financialId ? detail.financials.id(financialId) : null) ||
       detail.financials.find((item) => String(item.mk_barcode || '') === String(financialData.mk_barcode));
 
-    const cleanBarcode = Array.isArray(financialData.barcode)
-      ? financialData.barcode.filter(Boolean).map(String)
-      : financialData.barcode
-        ? [String(financialData.barcode)]
-        : [];
-
     const nextFinancial = {
       catalogProductBarcodeId: financialData.catalogProductBarcodeId,
       product_barcode_id: financialData.product_barcode_id || financialData.catalogProductBarcodeId,
@@ -233,6 +819,8 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
       quantity: Number(financialData.quantity || 0),
       countInStock: Number(financialData.countInStock || 0),
       units: financialData.units || 'QTY',
+      mfg_date: financialData.mfg_date || financialData.mfgDate || '',
+      exp_date: financialData.exp_date || financialData.expDate || '',
       barcode: cleanBarcode,
       updatedAt: new Date(),
     };
@@ -250,6 +838,35 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
     }
 
     await product.save();
+
+    if (financialData.catalogProductBarcodeId) {
+      await pgQuery(
+        `
+        UPDATE catalog.product_barcodes
+        SET
+          barcode = COALESCE($2, barcode),
+          mk_barcode = COALESCE($3, mk_barcode),
+          quantity = COALESCE($4, quantity),
+          image_url = COALESCE($5, image_url),
+          mongo_product_id = $6,
+          mongo_brand_id = $7,
+          mongo_financial_id = $8
+        WHERE id = $1
+        `,
+        [
+          Number(financialData.catalogProductBarcodeId),
+          cleanBarcode.find((item) => item !== String(financialData.mk_barcode)) || cleanBarcode[0] || null,
+          financialData.mk_barcode ? String(financialData.mk_barcode) : null,
+          financialData.quantity !== undefined && financialData.quantity !== null
+            ? Number(financialData.quantity)
+            : null,
+          detailData.image || null,
+          String(product._id),
+          String(detail._id),
+          String(financial._id),
+        ]
+      );
+    }
 
     res.status(200).json({
       message: financialId ? 'Financial updated' : 'Financial assigned',

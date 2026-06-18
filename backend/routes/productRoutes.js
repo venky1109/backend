@@ -4,6 +4,7 @@ import {
   getProducts,
   // getProductById,
   getProductBySlug,  // <-- Updated function for fetching by slug
+  getProductByBarcode,
   createProduct,
   updateProduct,
   deleteProduct,
@@ -27,6 +28,7 @@ import checkObjectId from '../middleware/checkObjectId.js';
 router.route('/').get(getProducts).post(protect, admin, createProduct);
 router.route('/categories').get(getCategories);
 router.get('/categories/:category/products', getProductsByCategory);
+router.get('/barcode/:barcode', getProductByBarcode);
 router.route('/:id/reviews').post(protect, checkObjectId, createProductReview);
 router.get('/top', getTopProducts);
 router.post('/financials/batch', getBatchFinancialDetails); 

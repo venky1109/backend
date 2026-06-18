@@ -4,6 +4,9 @@ import {
   addFinancialToPOSProduct,
   updatePOSProductFinancial,
   upsertPOSProductFinancialFromAssigner,
+  lookupBarcodeAssignerProduct,
+  getBarcodeAssignerNameSuggestions,
+  getBarcodeAssignerCatalogBarcodeById,
   getPOSProductByBarcode,
   getPOSProductByCatalogProductBarcodeId,
 } from '../controllers/POSProductController.js';
@@ -19,6 +22,9 @@ router.use(protectPOS);
 router.post('/create-from-catalog', isAdminOrInventory, createPOSProductFromCatalog);
 router.post('/add-financial', isAdminOrInventory, addFinancialToPOSProduct);
 router.post('/barcode-assigner/upsert', isAdminOrInventory, upsertPOSProductFinancialFromAssigner);
+router.get('/barcode-assigner/lookup', isAdminOrInventory, lookupBarcodeAssignerProduct);
+router.get('/barcode-assigner/name-suggestions', isAdminOrInventory, getBarcodeAssignerNameSuggestions);
+router.get('/barcode-assigner/catalog-barcode/:catalogProductBarcodeId', isAdminOrInventory, getBarcodeAssignerCatalogBarcodeById);
 router.put('/update-financial', isAdminOrInventory, updatePOSProductFinancial);
 router.get(
   '/catalog-product-barcode/:catalogProductBarcodeId',

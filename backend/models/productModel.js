@@ -12,6 +12,8 @@ const financialSchema = new mongoose.Schema({
   Discount: { type: Number, required: true },
   quantity: { type: Number, required: true },
   countInStock: { type: Number, required: true },
+  mfg_date: { type: String },
+  exp_date: { type: String },
   createdAt: { type: Date },
   updatedAt: { type: Date },
   rating: { type: Number },
