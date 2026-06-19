@@ -441,6 +441,47 @@ const findCatalogAssignerMatches = async ({ mode, q }) => {
     values
   );
 
+  if (byBarcode && rows.length) {
+    const matchedRow = rows[0];
+    const { rows: siblingRows } = await pgQuery(
+      `
+      SELECT
+        pb.*,
+        p.product_name_eng,
+        p.product_name_tel,
+        p.product_code,
+        p.hsncode,
+        p.gst_rate,
+        b.brand_name_english,
+        b.brand_name_telugu,
+        c.category_name_english,
+        c.category_name_telugu,
+        u.unit_name,
+        u.unit_short_code,
+        rp.gst_rate AS rate_gst_rate,
+        rp.notes AS rate_plan_notes
+      FROM catalog.product_barcodes pb
+      LEFT JOIN catalog.products p ON p.id = pb.product_id
+      LEFT JOIN catalog.brands b ON b.id = pb.brand_id
+      LEFT JOIN catalog.categories c ON c.id = pb.category_id
+      LEFT JOIN catalog.units u ON u.id = pb.unit_id
+      LEFT JOIN catalog.rate_plans rp
+        ON rp.product_barcode_id = pb.id
+        AND lower(rp.rate_for) = 'customer'
+      WHERE pb.product_id = $1
+        AND ($2::bigint IS NULL OR pb.brand_id = $2)
+      ORDER BY
+        CASE WHEN pb.id = $3 THEN 0 ELSE 1 END,
+        pb.quantity ASC NULLS LAST,
+        pb.id DESC
+      LIMIT 50
+      `,
+      [matchedRow.product_id, matchedRow.brand_id || null, matchedRow.id]
+    );
+
+    return siblingRows.map(mapCatalogAssignerRow);
+  }
+
   return rows.map(mapCatalogAssignerRow);
 };
 
@@ -508,6 +549,16 @@ const firstFinancial = (product, predicate) => {
   return null;
 };
 
+const allFinancials = (product) => {
+  const matches = [];
+  for (const detail of product.details || []) {
+    for (const financial of detail.financials || []) {
+      matches.push({ detail, financial });
+    }
+  }
+  return matches;
+};
+
 const mapMongoAssignerMatch = ({ product, detail, financial, matchedBarcode = '' }) => ({
   source: 'mongo',
   id: product._id,
@@ -519,13 +570,14 @@ const mapMongoAssignerMatch = ({ product, detail, financial, matchedBarcode = ''
   catalogBrandId: detail?.catalogBrandId || '',
   catalogProductBarcodeId: financial?.catalogProductBarcodeId || financial?.product_barcode_id || '',
   productBarcodeId: financial?.product_barcode_id || financial?.catalogProductBarcodeId || '',
-  mkid: financial?.catalogProductBarcodeId || financial?.mkid || '',
+  mkid: financial?.mkid || financial?.catalogProductBarcodeId || financial?.product_barcode_id || '',
   mk_barcode: financial?.mk_barcode || '',
   barcode: (financial?.barcode || []).join(', ') || matchedBarcode,
   productName: product.name || product.productname || product.englishname || '',
   category: product.category || '',
   brand: detail?.brand || '',
   description: detail?.description || '',
+  imageUrl: detail?.images?.[0]?.image || firstDetailImage(product.details) || '',
   units: financial?.units || 'QTY',
   quantity: numberOrBlank(financial?.quantity),
   countInStock: numberOrBlank(financial?.countInStock),
@@ -554,7 +606,22 @@ const findMongoAssignerMatches = async ({ mode, q }) => {
       (financial.barcode || []).map(String).includes(normalized)
     );
 
-    return found ? [mapMongoAssignerMatch({ product, ...found, matchedBarcode: normalized })] : [];
+    if (!found) return [];
+
+    return allFinancials(product)
+      .sort((left, right) => {
+        const leftMatched = String(left.financial?._id) === String(found.financial?._id) ? 0 : 1;
+        const rightMatched = String(right.financial?._id) === String(found.financial?._id) ? 0 : 1;
+        return leftMatched - rightMatched;
+      })
+      .map((match) =>
+        mapMongoAssignerMatch({
+          product,
+          ...match,
+          matchedBarcode:
+            String(match.financial?._id) === String(found.financial?._id) ? normalized : '',
+        })
+      );
   }
 
   const matcher = new RegExp(escapeRegex(normalized), 'i');
@@ -811,7 +878,10 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
     const nextFinancial = {
       catalogProductBarcodeId: financialData.catalogProductBarcodeId,
       product_barcode_id: financialData.product_barcode_id || financialData.catalogProductBarcodeId,
-      mkid: financialData.catalogProductBarcodeId,
+      mkid:
+        financialData.mkid ||
+        financialData.catalogProductBarcodeId ||
+        financialData.product_barcode_id,
       mk_barcode: String(financialData.mk_barcode),
       price: Number(financialData.price || 0),
       dprice: Number(financialData.dprice || 0),
@@ -939,9 +1009,9 @@ const buildPOSProductSearchResponse = async ({ product, detail, financial }) => 
     catalogBrandId: detail.catalogBrandId,
     brandId: detail._id,
     financialId: financial._id,
-    catalogProductBarcodeId: financial.catalogProductBarcodeId,
-    mkid: financial.catalogProductBarcodeId,
-    productBarcodeId: financial.catalogProductBarcodeId,
+  catalogProductBarcodeId: financial.catalogProductBarcodeId,
+  mkid: financial.mkid || financial.catalogProductBarcodeId || financial.product_barcode_id,
+  productBarcodeId: financial.product_barcode_id || financial.catalogProductBarcodeId || financial.mkid,
     MRP: financial.price,
     dprice: financial.dprice,
     quantity: financial.quantity,

@@ -36,7 +36,7 @@ const withCatalogBarcodeIdAsMkid = (product) => {
       ...detail,
       financials: (detail.financials || []).map((financial) => ({
         ...financial,
-        mkid: financial.catalogProductBarcodeId ?? financial.mkid,
+        mkid: financial.mkid ?? financial.catalogProductBarcodeId ?? financial.product_barcode_id,
       })),
     })),
   };
@@ -47,7 +47,7 @@ const financialWithCatalogBarcodeIdAsMkid = (financial) => {
 
   return {
     ...payload,
-    mkid: payload.catalogProductBarcodeId ?? payload.mkid,
+    mkid: payload.mkid ?? payload.catalogProductBarcodeId ?? payload.product_barcode_id,
   };
 };
 
@@ -113,7 +113,10 @@ const productWithMatchMeta = async (product, match = null) => {
     matchedCatalogBrandId: match.detail?.catalogBrandId,
     matchedFinancialId: match.financial?._id,
     matchedCatalogProductBarcodeId: match.financial?.catalogProductBarcodeId,
-    matchedMkid: match.financial?.catalogProductBarcodeId ?? match.financial?.mkid,
+    matchedMkid:
+      match.financial?.mkid ??
+      match.financial?.catalogProductBarcodeId ??
+      match.financial?.product_barcode_id,
     matchedBarcode: match.financial?.barcode || [],
     matchedQuantity: match.financial?.quantity,
     matchedUnits: match.financial?.units,
@@ -282,20 +285,15 @@ const getProductBySlug = asyncHandler(async (req, res) => {
 
   if (!product && Number.isFinite(catalogBarcodeId)) {
     product = await Product.findOne({
-      'details.financials.catalogProductBarcodeId': catalogBarcodeId,
+      $or: [
+        { 'details.financials.mkid': catalogBarcodeId },
+        { 'details.financials.catalogProductBarcodeId': catalogBarcodeId },
+        { 'details.financials.product_barcode_id': catalogBarcodeId },
+      ],
     });
 
     if (product) {
-      for (const detail of product.details || []) {
-        const financial = detail.financials?.find(
-          (item) => Number(item.catalogProductBarcodeId) === catalogBarcodeId
-        );
-
-        if (financial) {
-          match = { detail, financial };
-          break;
-        }
-      }
+      match = findMatchingFinancialByBarcode(product, lookupValue);
     }
   }
 
@@ -541,7 +539,7 @@ const getBatchFinancialDetails = async (req, res) => {
             productId: item.productId,
             detailId: item.detailId,
             financialId: item.financialId,
-            mkid: financial.catalogProductBarcodeId ?? financial.mkid,
+            mkid: financial.mkid ?? financial.catalogProductBarcodeId ?? financial.product_barcode_id,
             price: financial.price,
             dprice: financial.dprice,
             discount:  financial.Discount, // Handle both possible naming conventions

@@ -1,6 +1,9 @@
 export const assignFinancialMkIds = async (Product) => {
   const products = await Product.find({
-    'details.financials.catalogProductBarcodeId': { $exists: true },
+    $or: [
+      { 'details.financials.catalogProductBarcodeId': { $exists: true } },
+      { 'details.financials.product_barcode_id': { $exists: true } },
+    ],
   });
   const updates = [];
   let totalFinancials = 0;
@@ -10,7 +13,7 @@ export const assignFinancialMkIds = async (Product) => {
       detail.financials?.forEach((financial) => {
         totalFinancials += 1;
 
-        const nextMkid = Number(financial.catalogProductBarcodeId);
+        const nextMkid = Number(financial.mkid ?? financial.catalogProductBarcodeId ?? financial.product_barcode_id);
         if (!Number.isFinite(nextMkid) || financial.mkid === nextMkid) return;
 
         updates.push({
@@ -42,18 +45,25 @@ export const assignFinancialMkIds = async (Product) => {
 };
 
 export const findFinancialByMkid = async (Product, mkid) => {
-  const catalogProductBarcodeId = Number(mkid);
-  if (!Number.isInteger(catalogProductBarcodeId) || catalogProductBarcodeId < 1) return null;
+  const numericMkid = Number(mkid);
+  if (!Number.isInteger(numericMkid) || numericMkid < 1) return null;
 
   const product = await Product.findOne({
-    'details.financials.catalogProductBarcodeId': catalogProductBarcodeId,
+    $or: [
+      { 'details.financials.mkid': numericMkid },
+      { 'details.financials.catalogProductBarcodeId': numericMkid },
+      { 'details.financials.product_barcode_id': numericMkid },
+    ],
   });
 
   if (!product) return null;
 
   for (const detail of product.details || []) {
     const financial = detail.financials?.find(
-      (item) => Number(item.catalogProductBarcodeId) === catalogProductBarcodeId
+      (item) =>
+        Number(item.mkid) === numericMkid ||
+        Number(item.catalogProductBarcodeId) === numericMkid ||
+        Number(item.product_barcode_id) === numericMkid
     );
 
     if (financial) {

@@ -3,6 +3,7 @@ import slugify from 'slugify';
 
 // Define a schema for the financial details
 const financialSchema = new mongoose.Schema({
+  // Cashier shortcode and barcode identity. The catalog linkage fields below are optional legacy duplicates.
   catalogProductBarcodeId: { type: Number, index: true },
   product_barcode_id: { type: Number, index: true },
   mkid: { type: Number, index: true },
@@ -24,8 +25,9 @@ const financialSchema = new mongoose.Schema({
 
 financialSchema.set('toJSON', {
   transform: (_doc, ret) => {
-    if (ret.catalogProductBarcodeId !== undefined && ret.catalogProductBarcodeId !== null) {
-      ret.mkid = ret.catalogProductBarcodeId;
+    const legacyMkid = ret.catalogProductBarcodeId ?? ret.product_barcode_id;
+    if ((ret.mkid === undefined || ret.mkid === null) && legacyMkid !== undefined && legacyMkid !== null) {
+      ret.mkid = legacyMkid;
     }
     return ret;
   },
@@ -33,8 +35,9 @@ financialSchema.set('toJSON', {
 
 financialSchema.set('toObject', {
   transform: (_doc, ret) => {
-    if (ret.catalogProductBarcodeId !== undefined && ret.catalogProductBarcodeId !== null) {
-      ret.mkid = ret.catalogProductBarcodeId;
+    const legacyMkid = ret.catalogProductBarcodeId ?? ret.product_barcode_id;
+    if ((ret.mkid === undefined || ret.mkid === null) && legacyMkid !== undefined && legacyMkid !== null) {
+      ret.mkid = legacyMkid;
     }
     return ret;
   },
