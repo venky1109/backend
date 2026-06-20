@@ -810,6 +810,77 @@ const mapMongoAssignerMatch = ({ product, detail, financial, matchedBarcode = ''
   exp_date: financial?.exp_date || '',
 });
 
+const enrichCatalogMatchesWithMongoFinancials = async (catalogMatches = []) => {
+  if (!catalogMatches.length) return catalogMatches;
+
+  const mkids = catalogMatches
+    .map((item) => Number(item.catalogProductBarcodeId || item.productBarcodeId || item.mkid))
+    .filter((item) => Number.isInteger(item) && item > 0);
+  const mkBarcodes = catalogMatches
+    .map((item) => textOrBlank(item.mk_barcode))
+    .filter(Boolean);
+
+  if (!mkids.length && !mkBarcodes.length) return catalogMatches;
+
+  const products = await Product.find({
+    $or: [
+      { 'details.financials.mkid': { $in: mkids } },
+      { 'details.financials.catalogProductBarcodeId': { $in: mkids } },
+      { 'details.financials.product_barcode_id': { $in: mkids } },
+      { 'details.financials.mk_barcode': { $in: mkBarcodes } },
+    ],
+  });
+
+  const mongoByKey = new Map();
+  for (const product of products) {
+    for (const { detail, financial } of allFinancials(product)) {
+      const mapped = mapMongoAssignerMatch({ product, detail, financial });
+      [
+        financial?.mkid,
+        financial?.catalogProductBarcodeId,
+        financial?.product_barcode_id,
+        financial?.mk_barcode,
+      ]
+        .map((value) => textOrBlank(value))
+        .filter(Boolean)
+        .forEach((key) => mongoByKey.set(key, mapped));
+    }
+  }
+
+  return catalogMatches.map((item) => {
+    const mongo = [
+      item.catalogProductBarcodeId,
+      item.productBarcodeId,
+      item.mkid,
+      item.mk_barcode,
+    ]
+      .map((value) => textOrBlank(value))
+      .filter(Boolean)
+      .map((key) => mongoByKey.get(key))
+      .find(Boolean);
+
+    if (!mongo) return item;
+
+    const mongoPrice = numberOrBlank(mongo.price);
+    const mongoDprice = numberOrBlank(mongo.dprice);
+
+    return {
+      ...item,
+      productId: mongo.productId || item.productId,
+      detailId: mongo.detailId || item.detailId,
+      financialId: mongo.financialId || item.financialId,
+      description: item.description || mongo.description,
+      imageUrl: item.imageUrl || mongo.imageUrl,
+      price: mongoPrice || item.price,
+      dprice: mongoDprice || item.dprice,
+      countInStock: mongo.countInStock || item.countInStock,
+      mfg_date: mongo.mfg_date || item.mfg_date,
+      exp_date: mongo.exp_date || item.exp_date,
+      barcode: item.barcode || mongo.barcode,
+    };
+  });
+};
+
 const findMongoAssignerMatches = async ({ mode, q }) => {
   const normalized = textOrBlank(q);
   if (!normalized) return [];
@@ -875,7 +946,9 @@ export const lookupBarcodeAssignerProduct = async (req, res) => {
       return res.status(400).json({ error: 'Search value is required' });
     }
 
-    const catalogMatches = await findCatalogAssignerMatches({ mode, q });
+    const catalogMatches = await enrichCatalogMatchesWithMongoFinancials(
+      await findCatalogAssignerMatches({ mode, q })
+    );
     if (catalogMatches.length) {
       return res.json({
         source: 'catalog',
@@ -936,10 +1009,11 @@ export const getBarcodeAssignerNameSuggestions = async (req, res) => {
       return res.json({ suggestions: [] });
     }
 
-    const [catalogMatches, mongoMatches] = await Promise.all([
+    const [rawCatalogMatches, mongoMatches] = await Promise.all([
       findCatalogAssignerMatches({ mode: 'name', q }),
       findMongoAssignerMatches({ mode: 'name', q }),
     ]);
+    const catalogMatches = await enrichCatalogMatchesWithMongoFinancials(rawCatalogMatches);
 
     const seen = new Set();
     const suggestions = [...catalogMatches, ...mongoMatches]
@@ -1005,7 +1079,7 @@ export const getBarcodeAssignerSyncData = async (req, res) => {
       [limit]
     );
 
-    const catalogItems = rows.map(mapCatalogAssignerRow);
+    const catalogItems = await enrichCatalogMatchesWithMongoFinancials(rows.map(mapCatalogAssignerRow));
     const mongoProducts = await Product.find({})
       .select('catalogProductId catalogCategoryId name productname englishname category hsncode gst details')
       .limit(limit);
