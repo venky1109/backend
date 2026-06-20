@@ -117,6 +117,53 @@ const numberOrBlank = (value) => {
 
 const textOrBlank = (value) => String(value || '').trim();
 
+const padCodePart = (value, size) => String(Number(value || 0)).padStart(size, '0');
+
+const makeMkBarcode = ({
+  product_id,
+  brand_id,
+  category_id,
+  unit_id,
+  quantity,
+}) =>
+  '890' +
+  padCodePart(product_id, 4) +
+  padCodePart(brand_id, 3) +
+  padCodePart(category_id, 2) +
+  padCodePart(unit_id, 2) +
+  padCodePart(parseInt(quantity || 0, 10), 3);
+
+const buildMkBarcodePreview = ({ productId, brandId, categoryId, unitId, quantity, currentMkBarcode = '' }) => {
+  if (!productId || !brandId || !categoryId || !unitId) {
+    return {
+      expectedMkBarcode: '',
+      currentMkBarcode: textOrBlank(currentMkBarcode),
+      mismatch: false,
+      canGenerate: false,
+      message: 'Product, brand, category, unit and quantity are required to generate MK barcode.',
+    };
+  }
+
+  const expectedMkBarcode = makeMkBarcode({
+    product_id: Number(productId),
+    brand_id: Number(brandId),
+    category_id: Number(categoryId),
+    unit_id: Number(unitId),
+    quantity: Number(quantity || 0),
+  });
+  const current = textOrBlank(currentMkBarcode);
+
+  return {
+    expectedMkBarcode,
+    currentMkBarcode: current,
+    mismatch: Boolean(current && current !== expectedMkBarcode),
+    canGenerate: true,
+    message: current && current !== expectedMkBarcode
+      ? 'MK barcode mismatch. You can overwrite with expected barcode.'
+      : 'MK barcode is ready.',
+  };
+};
+
 const makeCatalogCode = (prefix, value) => {
   const compact = textOrBlank(value)
     .toUpperCase()
@@ -204,6 +251,82 @@ const findOrCreateCatalogUnit = async (unitValue) => {
   return inserted.rows[0];
 };
 
+const findCatalogUnit = async (unitValue) => {
+  const unit = textOrBlank(unitValue);
+  if (!unit) return null;
+
+  const existing = await pgQuery(
+    `
+    SELECT *
+    FROM catalog.units
+    WHERE lower(trim(unit_short_code)) = lower(trim($1))
+       OR lower(trim(unit_name)) = lower(trim($1))
+    ORDER BY id ASC
+    LIMIT 1
+    `,
+    [unit]
+  );
+
+  return existing.rows[0] || null;
+};
+
+const findCatalogCategory = async (categoryName) => {
+  const name = textOrBlank(categoryName);
+  if (!name) return null;
+
+  const existing = await pgQuery(
+    `
+    SELECT *
+    FROM catalog.categories
+    WHERE lower(trim(category_name_english)) = lower(trim($1))
+       OR lower(trim(category_name_telugu)) = lower(trim($1))
+    ORDER BY id ASC
+    LIMIT 1
+    `,
+    [name]
+  );
+
+  return existing.rows[0] || null;
+};
+
+const findCatalogBrand = async (brandName) => {
+  const name = textOrBlank(brandName);
+  if (!name) return null;
+
+  const existing = await pgQuery(
+    `
+    SELECT *
+    FROM catalog.brands
+    WHERE lower(trim(brand_name_english)) = lower(trim($1))
+       OR lower(trim(brand_name_telugu)) = lower(trim($1))
+    ORDER BY id ASC
+    LIMIT 1
+    `,
+    [name]
+  );
+
+  return existing.rows[0] || null;
+};
+
+const findCatalogProduct = async (productName) => {
+  const name = textOrBlank(productName);
+  if (!name) return null;
+
+  const existing = await pgQuery(
+    `
+    SELECT *
+    FROM catalog.products
+    WHERE lower(trim(product_name_eng)) = lower(trim($1))
+       OR lower(trim(product_name_tel)) = lower(trim($1))
+    ORDER BY id ASC
+    LIMIT 1
+    `,
+    [name]
+  );
+
+  return existing.rows[0] || null;
+};
+
 const findOrCreateCatalogProduct = async (productData, categoryRow) => {
   const name = textOrBlank(productData.name || productData.productname || productData.englishname);
   const productName = name || 'Migration Product';
@@ -237,6 +360,106 @@ const findOrCreateCatalogProduct = async (productData, categoryRow) => {
     ]
   );
   return inserted.rows[0];
+};
+
+export const previewBarcodeAssignerMkBarcode = async (req, res) => {
+  try {
+    const {
+      productData = {},
+      detailData = {},
+      financialData = {},
+    } = req.body || {};
+
+    const catalogProductBarcodeId = Number(
+      financialData.catalogProductBarcodeId ||
+      financialData.product_barcode_id ||
+      financialData.mkid
+    );
+
+    if (Number.isInteger(catalogProductBarcodeId) && catalogProductBarcodeId > 0) {
+      const { rows } = await pgQuery(
+        `
+        SELECT
+          pb.id,
+          pb.product_id,
+          pb.brand_id,
+          pb.category_id,
+          pb.unit_id,
+          pb.quantity,
+          pb.mk_barcode
+        FROM catalog.product_barcodes pb
+        WHERE pb.id = $1
+        LIMIT 1
+        `,
+        [catalogProductBarcodeId]
+      );
+
+      if (!rows[0]) {
+        return res.status(404).json({ error: 'Catalog product barcode row not found' });
+      }
+
+      const row = rows[0];
+      return res.json({
+        catalogProductBarcodeId: row.id,
+        ...buildMkBarcodePreview({
+          productId: row.product_id,
+          brandId: row.brand_id,
+          categoryId: row.category_id,
+          unitId: row.unit_id,
+          quantity: financialData.quantity ?? row.quantity,
+          currentMkBarcode: financialData.mk_barcode || row.mk_barcode,
+        }),
+      });
+    }
+
+    const [product, category, brand, unit] = await Promise.all([
+      productData.catalogProductId ? null : findCatalogProduct(productData.name || productData.productname || productData.englishname),
+      productData.catalogCategoryId ? null : findCatalogCategory(productData.category),
+      detailData.catalogBrandId ? null : findCatalogBrand(detailData.brand),
+      findCatalogUnit(financialData.units),
+    ]);
+    const productId = productData.catalogProductId || product?.id;
+    const categoryId = productData.catalogCategoryId || category?.id;
+    const brandId = detailData.catalogBrandId || brand?.id;
+    const quantity = Number(financialData.quantity || 0);
+
+    if (!productId || !categoryId || !brandId || !unit?.id || !quantity) {
+      return res.json({
+        expectedMkBarcode: '',
+        currentMkBarcode: textOrBlank(financialData.mk_barcode),
+        mismatch: false,
+        canGenerate: false,
+        message: 'Product name, category, brand, quantity and units must match catalog before generating MK barcode.',
+        resolved: {
+          productId: productId || '',
+          categoryId: categoryId || '',
+          brandId: brandId || '',
+          unitId: unit?.id || '',
+          quantity: quantity || '',
+        },
+      });
+    }
+
+    const preview = buildMkBarcodePreview({
+      productId,
+      brandId,
+      categoryId,
+      unitId: unit.id,
+      quantity,
+      currentMkBarcode: financialData.mk_barcode,
+    });
+
+    return res.json({
+      ...preview,
+      catalogProductId: productId || '',
+      catalogCategoryId: categoryId || '',
+      catalogBrandId: brandId || '',
+      catalogUnitId: unit.id || '',
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to preview MK barcode', details: err.message });
+  }
 };
 
 const ensureCatalogBarcodeForAssignment = async ({
@@ -744,6 +967,85 @@ export const getBarcodeAssignerNameSuggestions = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to get barcode assigner suggestions', details: err.message });
+  }
+};
+
+export const getBarcodeAssignerSyncData = async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit || 20000), 50000);
+
+    const { rows } = await pgQuery(
+      `
+      SELECT
+        pb.*,
+        p.product_name_eng,
+        p.product_name_tel,
+        p.product_code,
+        p.hsncode,
+        p.gst_rate,
+        b.brand_name_english,
+        b.brand_name_telugu,
+        c.category_name_english,
+        c.category_name_telugu,
+        u.unit_name,
+        u.unit_short_code,
+        rp.gst_rate AS rate_gst_rate,
+        rp.notes AS rate_plan_notes
+      FROM catalog.product_barcodes pb
+      LEFT JOIN catalog.products p ON p.id = pb.product_id
+      LEFT JOIN catalog.brands b ON b.id = pb.brand_id
+      LEFT JOIN catalog.categories c ON c.id = pb.category_id
+      LEFT JOIN catalog.units u ON u.id = pb.unit_id
+      LEFT JOIN catalog.rate_plans rp
+        ON rp.product_barcode_id = pb.id
+        AND lower(rp.rate_for) = 'customer'
+      ORDER BY pb.updated_at DESC NULLS LAST, pb.id DESC
+      LIMIT $1
+      `,
+      [limit]
+    );
+
+    const catalogItems = rows.map(mapCatalogAssignerRow);
+    const mongoProducts = await Product.find({})
+      .select('catalogProductId catalogCategoryId name productname englishname category hsncode gst details')
+      .limit(limit);
+
+    const mongoItems = mongoProducts.flatMap((product) =>
+      allFinancials(product).map((match) =>
+        mapMongoAssignerMatch({
+          product,
+          ...match,
+        })
+      )
+    );
+
+    const seen = new Set();
+    const suggestions = [...catalogItems, ...mongoItems].filter((item) => {
+      const key = [
+        item.source,
+        item.catalogProductBarcodeId || item.productBarcodeId || item.financialId || '',
+        item.mk_barcode || '',
+        item.productName || '',
+        item.brand || '',
+        item.quantity || '',
+        item.units || '',
+      ].join('|').toLowerCase();
+
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    return res.json({
+      syncedAt: new Date().toISOString(),
+      total: suggestions.length,
+      catalogTotal: catalogItems.length,
+      mongoTotal: mongoItems.length,
+      suggestions,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to sync barcode assigner data', details: err.message });
   }
 };
 
