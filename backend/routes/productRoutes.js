@@ -2,6 +2,7 @@ import express from 'express';
 const router = express.Router();
 import {
   getProducts,
+  getHomeProductSections,
   // getProductById,
   getProductBySlug,  // <-- Updated function for fetching by slug
   getProductByBarcode,
@@ -26,6 +27,7 @@ import protectEither from '../middleware/protectEither.js';
 import checkObjectId from '../middleware/checkObjectId.js';
 
 router.route('/').get(getProducts).post(protect, admin, createProduct);
+router.route('/home-sections').get(getHomeProductSections);
 router.route('/categories').get(getCategories);
 router.get('/categories/:category/products', getProductsByCategory);
 router.get('/barcode/:barcode', getProductByBarcode);

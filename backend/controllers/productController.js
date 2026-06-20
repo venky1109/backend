@@ -175,6 +175,48 @@ const getProducts = asyncHandler(async (req, res) => {
 
 });
 
+// @desc    Fetch home catalog with a small product set from every category
+// @route   GET /api/products/home-sections
+// @access  Public
+const getHomeProductSections = asyncHandler(async (req, res) => {
+  const requestedPerCategory = Number(req.query.perCategory);
+  const perCategory = Number.isFinite(requestedPerCategory) && requestedPerCategory > 0
+    ? Math.min(requestedPerCategory, 10)
+    : 5;
+  const budgetCategory = 'BUDGET FRIENDLY PACKAGES';
+
+  const categories = await Product.distinct('category');
+  const orderedCategories = [
+    budgetCategory,
+    ...categories
+      .filter((category) => category && !String(category).trim().toUpperCase().includes(budgetCategory))
+      .sort((a, b) => String(a).localeCompare(String(b))),
+  ];
+
+  const sections = await Promise.all(
+    orderedCategories.map(async (category) => {
+      const products = await Product.find({ category })
+        .sort({ name: 1 })
+        .limit(perCategory);
+
+      return {
+        category,
+        products: products.map(withCatalogBarcodeIdAsMkid),
+      };
+    })
+  );
+
+  const visibleSections = sections.filter((section) => section.products.length > 0);
+
+  res.json({
+    categories: visibleSections.map((section) => section.category),
+    sections: visibleSections,
+    products: visibleSections.flatMap((section) => section.products),
+    perCategory,
+    cacheVersion: new Date().toISOString(),
+  });
+});
+
 // @desc    Fetch all unique categories
 // @route   GET /api/products/categories
 // @access  Public
@@ -995,6 +1037,7 @@ const updateStockById = asyncHandler(async (req, res) => {
 
 export {
   getProducts,
+  getHomeProductSections,
   getCategories,
   getProductBySlug,
   getProductByBarcode,
