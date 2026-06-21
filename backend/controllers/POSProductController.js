@@ -1027,7 +1027,7 @@ const enrichCatalogMatchesWithMongoFinancials = async (catalogMatches = []) => {
       countInStock: mongo.countInStock || item.countInStock,
       mfg_date: mongo.mfg_date || item.mfg_date,
       exp_date: mongo.exp_date || item.exp_date,
-      barcode: item.barcode || mongo.barcode,
+      barcode: item.barcode,
     };
   });
 };
@@ -1616,9 +1616,11 @@ export const getPOSProductByBarcode = async (req, res) => {
     const barcodesArray = barcode.split(',');
     const barcodeToFind = barcodesArray[0];
 
-    // Check if the first barcode in the array exists in the product's financial details
     const product = await Product.findOne({
-      "details.financials.barcode": { $in: [barcodeToFind] }  // Check if the first barcode is in the array
+      $or: [
+        { "details.financials.barcode": { $in: [barcodeToFind] } },
+        { "details.financials.mk_barcode": barcodeToFind },
+      ],
     });
 
     // console.log('Found product:', product);
@@ -1629,7 +1631,10 @@ export const getPOSProductByBarcode = async (req, res) => {
 
     // Find the detail with the matching barcode
     const detail = product.details.find((d) =>
-      d.financials.some((f) => f.barcode.includes(barcodeToFind))  // Check if barcode exists in the array
+      d.financials.some((f) =>
+        (f.barcode || []).includes(barcodeToFind) ||
+        String(f.mk_barcode || '') === barcodeToFind
+      )
     );
 
     if (!detail) {
@@ -1637,7 +1642,10 @@ export const getPOSProductByBarcode = async (req, res) => {
     }
 
     // Find the financial entry with the matching barcode
-    const financial = detail.financials.find((f) => f.barcode.includes(barcodeToFind));
+    const financial = detail.financials.find((f) =>
+      (f.barcode || []).includes(barcodeToFind) ||
+      String(f.mk_barcode || '') === barcodeToFind
+    );
     const response = await buildPOSProductSearchResponse({ product, detail, financial });
 
     return res.status(200).json(response);
