@@ -30,6 +30,13 @@ const sanitizeFilename = (filename = '') =>
     .replace(/^-+|-+$/g, '')
     .toLowerCase();
 
+const sanitizeImageCatalogName = (value = '') =>
+  String(value || '')
+    .trim()
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[^a-zA-Z0-9]+/g, '')
+    .toLowerCase();
+
 const isPrivateAddress = (address) => {
   if (!address) return true;
 
@@ -269,11 +276,21 @@ export const uploadProductImage = async (req, res, next) => {
       originalName: file.originalname,
       uploadedBy: req.user?._id?.toString?.(),
     });
+    const catalogName =
+      sanitizeImageCatalogName(req.body?.name || req.body?.productName) ||
+      sanitizeImageCatalogName(file.originalname) ||
+      sanitizeImageCatalogName(uploaded.name);
+    const catalogImage = await ProductImage.create({
+      name: catalogName,
+      url: uploaded.url,
+      path: uploaded.path,
+    });
 
     res.status(201).json({
       message: 'Product image uploaded successfully',
       url: uploaded.url,
       imageUrl: uploaded.url,
+      catalogImage,
       image: uploaded,
     });
   } catch (error) {
@@ -306,11 +323,21 @@ export const uploadProductImageFromUrl = async (req, res, next) => {
       originalName: path.basename(parsedUrl.pathname) || 'product-image',
       uploadedBy: req.user?._id?.toString?.(),
     });
+    const catalogName =
+      sanitizeImageCatalogName(req.body?.name || req.body?.productName) ||
+      sanitizeImageCatalogName(path.basename(parsedUrl.pathname)) ||
+      sanitizeImageCatalogName(uploaded.name);
+    const catalogImage = await ProductImage.create({
+      name: catalogName,
+      url: uploaded.url,
+      path: uploaded.path,
+    });
 
     res.status(201).json({
       message: 'Product image uploaded successfully',
       url: uploaded.url,
       imageUrl: uploaded.url,
+      catalogImage,
       image: uploaded,
     });
   } catch (error) {

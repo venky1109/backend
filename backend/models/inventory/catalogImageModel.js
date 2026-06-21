@@ -77,6 +77,47 @@ const nameFromUrl = (rawUrl) => {
 };
 
 export const ProductImage = {
+  async create({ name, url, path } = {}) {
+    if (!url) return null;
+
+    const imageTable = await getImageTable();
+    const tableName = `${quoteIdentifier(imageTable.schema)}.${quoteIdentifier(imageTable.table)}`;
+    const columns = [];
+    const values = [];
+
+    if (imageTable.nameColumn && name) {
+      columns.push(imageTable.nameColumn);
+      values.push(name);
+    }
+    if (imageTable.pathColumn && path) {
+      columns.push(imageTable.pathColumn);
+      values.push(path);
+    }
+    columns.push(imageTable.urlColumn);
+    values.push(url);
+
+    const columnSql = columns.map(quoteIdentifier).join(', ');
+    const paramSql = values.map((_, index) => `$${index + 1}`).join(', ');
+    const returningId = imageTable.idColumn ? quoteIdentifier(imageTable.idColumn) : 'NULL';
+
+    const { rows } = await query(
+      `
+      INSERT INTO ${tableName} (${columnSql})
+      VALUES (${paramSql})
+      RETURNING ${returningId} AS id
+      `,
+      values
+    );
+
+    return {
+      id: rows[0]?.id ?? null,
+      name,
+      path,
+      url,
+      imageUrl: url,
+    };
+  },
+
   async search({ name, limit = 20 } = {}) {
     const search = normalizeSearch(name);
 
