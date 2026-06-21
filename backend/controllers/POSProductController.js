@@ -117,6 +117,18 @@ const numberOrBlank = (value) => {
 
 const textOrBlank = (value) => String(value || '').trim();
 
+const integerOrNull = (value) => {
+  const text = textOrBlank(value);
+  if (!/^\d+$/.test(text)) return null;
+  const number = Number(text);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
+};
+
+const numericTextOrNull = (value) => {
+  const text = textOrBlank(value);
+  return /^\d+$/.test(text) ? text : null;
+};
+
 const padCodePart = (value, size) => String(Number(value || 0)).padStart(size, '0');
 
 const makeMkBarcode = ({
@@ -265,6 +277,57 @@ const findCatalogUnit = async (unitValue) => {
     LIMIT 1
     `,
     [unit]
+  );
+
+  return existing.rows[0] || null;
+};
+
+const findCatalogProductById = async (id) => {
+  const productId = integerOrNull(id);
+  if (!productId) return null;
+
+  const existing = await pgQuery(
+    `
+    SELECT *
+    FROM catalog.products
+    WHERE id = $1
+    LIMIT 1
+    `,
+    [productId]
+  );
+
+  return existing.rows[0] || null;
+};
+
+const findCatalogCategoryById = async (id) => {
+  const categoryId = integerOrNull(id);
+  if (!categoryId) return null;
+
+  const existing = await pgQuery(
+    `
+    SELECT *
+    FROM catalog.categories
+    WHERE id = $1
+    LIMIT 1
+    `,
+    [categoryId]
+  );
+
+  return existing.rows[0] || null;
+};
+
+const findCatalogBrandById = async (id) => {
+  const brandId = integerOrNull(id);
+  if (!brandId) return null;
+
+  const existing = await pgQuery(
+    `
+    SELECT *
+    FROM catalog.brands
+    WHERE id = $1
+    LIMIT 1
+    `,
+    [brandId]
   );
 
   return existing.rows[0] || null;
@@ -452,6 +515,24 @@ const findOrCreateCatalogProduct = async (productData, categoryRow) => {
   return inserted.rows[0];
 };
 
+const catalogCategoryMatchesName = (row, name) =>
+  !row ||
+  !textOrBlank(name) ||
+  sameText(row.category_name_english, name) ||
+  sameText(row.category_name_telugu, name);
+
+const catalogBrandMatchesName = (row, name) =>
+  !row ||
+  !textOrBlank(name) ||
+  sameText(row.brand_name_english, name) ||
+  sameText(row.brand_name_telugu, name);
+
+const catalogProductMatchesName = (row, name) =>
+  !row ||
+  !textOrBlank(name) ||
+  sameText(row.product_name_eng, name) ||
+  sameText(row.product_name_tel, name);
+
 export const previewBarcodeAssignerMkBarcode = async (req, res) => {
   try {
     const {
@@ -460,13 +541,13 @@ export const previewBarcodeAssignerMkBarcode = async (req, res) => {
       financialData = {},
     } = req.body || {};
 
-    const catalogProductBarcodeId = Number(
+    const catalogProductBarcodeId = integerOrNull(
       financialData.catalogProductBarcodeId ||
       financialData.product_barcode_id ||
       financialData.mkid
     );
 
-    if (Number.isInteger(catalogProductBarcodeId) && catalogProductBarcodeId > 0) {
+    if (catalogProductBarcodeId) {
       const { rows } = await pgQuery(
         `
         SELECT
@@ -503,14 +584,14 @@ export const previewBarcodeAssignerMkBarcode = async (req, res) => {
     }
 
     const [product, category, brand, unit] = await Promise.all([
-      productData.catalogProductId ? null : findCatalogProduct(productData.name || productData.productname || productData.englishname),
-      productData.catalogCategoryId ? null : findCatalogCategory(productData.category),
-      detailData.catalogBrandId ? null : findCatalogBrand(detailData.brand),
+      integerOrNull(productData.catalogProductId) ? null : findCatalogProduct(productData.name || productData.productname || productData.englishname),
+      integerOrNull(productData.catalogCategoryId) ? null : findCatalogCategory(productData.category),
+      integerOrNull(detailData.catalogBrandId) ? null : findCatalogBrand(detailData.brand),
       findCatalogUnit(financialData.units),
     ]);
-    const productId = productData.catalogProductId || product?.id;
-    const categoryId = productData.catalogCategoryId || category?.id;
-    const brandId = detailData.catalogBrandId || brand?.id;
+    const productId = integerOrNull(productData.catalogProductId) || product?.id;
+    const categoryId = integerOrNull(productData.catalogCategoryId) || category?.id;
+    const brandId = integerOrNull(detailData.catalogBrandId) || brand?.id;
     const quantity = Number(financialData.quantity || 0);
 
     if (!productId || !categoryId || !brandId || !unit?.id || !quantity) {
@@ -611,18 +692,77 @@ const ensureCatalogBarcodeForAssignment = async ({
   financialData,
   cleanBarcode,
 }) => {
-  if (financialData.catalogProductBarcodeId) {
+  const existingBarcodeId = integerOrNull(
+    financialData.catalogProductBarcodeId ||
+    financialData.product_barcode_id ||
+    financialData.mkid
+  );
+
+  if (existingBarcodeId) {
+    const { rows } = await pgQuery(
+      `
+      SELECT *
+      FROM catalog.product_barcodes
+      WHERE id = $1
+      LIMIT 1
+      `,
+      [existingBarcodeId]
+    );
+    const existingBarcode = rows[0];
+    if (!existingBarcode) {
+      throw new Error(`Catalog product barcode row ${existingBarcodeId} was not found`);
+    }
+
+    const resolvedMkBarcode = textOrBlank(financialData.mk_barcode) || makeMkBarcode({
+      product_id: Number(existingBarcode.product_id),
+      brand_id: Number(existingBarcode.brand_id),
+      category_id: Number(existingBarcode.category_id),
+      unit_id: Number(existingBarcode.unit_id),
+      quantity: Number(financialData.quantity || existingBarcode.quantity || 0),
+    });
+    const vendorBarcode = numericTextOrNull(
+      cleanBarcode.find((item) => item !== resolvedMkBarcode) || cleanBarcode[0]
+    );
+
+    const updated = await pgQuery(
+      `
+      UPDATE catalog.product_barcodes
+      SET
+        barcode = COALESCE($2, barcode),
+        mk_barcode = COALESCE($3, mk_barcode),
+        image_url = COALESCE($4, image_url),
+        is_active = TRUE
+      WHERE id = $1
+      RETURNING *
+      `,
+      [existingBarcodeId, vendorBarcode, resolvedMkBarcode || null, detailData.image || null]
+    );
+    const barcode = updated.rows[0] || existingBarcode;
+
     return {
-      productId: productData.catalogProductId,
-      categoryId: productData.catalogCategoryId,
-      brandId: detailData.catalogBrandId,
-      barcodeId: financialData.catalogProductBarcodeId,
+      productId: integerOrNull(productData.catalogProductId) || barcode.product_id,
+      categoryId: integerOrNull(productData.catalogCategoryId) || barcode.category_id,
+      brandId: integerOrNull(detailData.catalogBrandId) || barcode.brand_id,
+      barcodeId: existingBarcodeId,
+      mkBarcode: barcode.mk_barcode || resolvedMkBarcode,
     };
   }
 
-  const category = await findOrCreateCatalogCategory(productData.category);
-  const product = await findOrCreateCatalogProduct(productData, category);
-  const brand = await findOrCreateCatalogBrand(detailData.brand);
+  const selectedCategory = await findCatalogCategoryById(productData.catalogCategoryId);
+  const category = catalogCategoryMatchesName(selectedCategory, productData.category)
+    ? selectedCategory || await findOrCreateCatalogCategory(productData.category)
+    : await findOrCreateCatalogCategory(productData.category);
+
+  const productName = productData.name || productData.productname || productData.englishname;
+  const selectedProduct = await findCatalogProductById(productData.catalogProductId);
+  const product = catalogProductMatchesName(selectedProduct, productName)
+    ? selectedProduct || await findOrCreateCatalogProduct(productData, category)
+    : await findOrCreateCatalogProduct(productData, category);
+
+  const selectedBrand = await findCatalogBrandById(detailData.catalogBrandId);
+  const brand = catalogBrandMatchesName(selectedBrand, detailData.brand)
+    ? selectedBrand || await findOrCreateCatalogBrand(detailData.brand)
+    : await findOrCreateCatalogBrand(detailData.brand);
   const unit = await findOrCreateCatalogUnit(financialData.units);
   const resolvedMkBarcode = textOrBlank(financialData.mk_barcode) || makeMkBarcode({
     product_id: Number(product.id),
@@ -631,7 +771,9 @@ const ensureCatalogBarcodeForAssignment = async ({
     unit_id: Number(unit.id),
     quantity: Number(financialData.quantity || 0),
   });
-  const vendorBarcode = cleanBarcode.find((item) => item !== resolvedMkBarcode) || cleanBarcode[0] || null;
+  const vendorBarcode = numericTextOrNull(
+    cleanBarcode.find((item) => item !== resolvedMkBarcode) || cleanBarcode[0]
+  );
 
   const existing = await pgQuery(
     `
@@ -663,8 +805,7 @@ const ensureCatalogBarcodeForAssignment = async ({
         barcode = COALESCE($2, barcode),
         mk_barcode = COALESCE($3, mk_barcode),
         image_url = COALESCE($4, image_url),
-        is_active = TRUE,
-        updated_at = now()
+        is_active = TRUE
       WHERE id = $1
       RETURNING *
       `,
@@ -697,7 +838,7 @@ const ensureCatalogBarcodeForAssignment = async ({
   await pgQuery(
     `
     UPDATE catalog.rate_plans
-    SET gst_rate = $2, updated_at = now()
+    SET gst_rate = $2
     WHERE product_barcode_id = $1
       AND lower(rate_for) = 'customer'
     `,
@@ -1318,6 +1459,17 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
         ? [String(financialData.barcode)]
         : [];
 
+    productData.catalogProductId = integerOrNull(productData.catalogProductId);
+    productData.catalogCategoryId = integerOrNull(productData.catalogCategoryId);
+    detailData.catalogBrandId = integerOrNull(detailData.catalogBrandId);
+    financialData.catalogProductBarcodeId = integerOrNull(
+      financialData.catalogProductBarcodeId ||
+      financialData.product_barcode_id ||
+      financialData.mkid
+    );
+    financialData.product_barcode_id = integerOrNull(financialData.product_barcode_id);
+    financialData.mkid = integerOrNull(financialData.mkid);
+
     if (!financialData.catalogProductBarcodeId) {
       const catalogIds = await ensureCatalogBarcodeForAssignment({
         productData,
@@ -1381,8 +1533,8 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
     if (!product) {
       product = new Product({
         _id: new mongoose.Types.ObjectId(),
-        catalogProductId: productData.catalogProductId ? Number(productData.catalogProductId) : undefined,
-        catalogCategoryId: productData.catalogCategoryId ? Number(productData.catalogCategoryId) : undefined,
+        catalogProductId: productData.catalogProductId || undefined,
+        catalogCategoryId: productData.catalogCategoryId || undefined,
         mongoCategoryId: productData.mongoCategoryId || new mongoose.Types.ObjectId().toString(),
         name: requestedProductName,
         productname: productData.productname || requestedProductName,
@@ -1395,10 +1547,10 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
       });
     } else {
       product.catalogProductId = productData.catalogProductId
-        ? Number(productData.catalogProductId)
+        ? productData.catalogProductId
         : product.catalogProductId;
       product.catalogCategoryId = productData.catalogCategoryId
-        ? Number(productData.catalogCategoryId)
+        ? productData.catalogCategoryId
         : product.catalogCategoryId;
       product.name = requestedProductName || product.name;
       product.productname = productData.productname || requestedProductName || product.productname || product.name;
@@ -1419,7 +1571,7 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
     if (!detail) {
       product.details.push({
         _id: new mongoose.Types.ObjectId(),
-        catalogBrandId: detailData.catalogBrandId ? Number(detailData.catalogBrandId) : undefined,
+        catalogBrandId: detailData.catalogBrandId || undefined,
         brand: detailData.brand || 'Migration',
         description: detailData.description || 'Created from barcode assigner',
         images: detailData.image ? [{ image: detailData.image }] : [],
@@ -1428,7 +1580,7 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
       detail = product.details[product.details.length - 1];
     } else {
       detail.catalogBrandId = detailData.catalogBrandId
-        ? Number(detailData.catalogBrandId)
+        ? detailData.catalogBrandId
         : detail.catalogBrandId;
       detail.brand = detailData.brand || detail.brand;
       detail.description = detailData.description || detail.description || 'Created from barcode assigner';
@@ -1495,8 +1647,8 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
         WHERE id = $1
         `,
         [
-          Number(financialData.catalogProductBarcodeId),
-          cleanBarcode.find((item) => item !== String(financialData.mk_barcode)) || cleanBarcode[0] || null,
+          financialData.catalogProductBarcodeId,
+          numericTextOrNull(cleanBarcode.find((item) => item !== String(financialData.mk_barcode)) || cleanBarcode[0]),
           financialData.mk_barcode ? String(financialData.mk_barcode) : null,
           financialData.quantity !== undefined && financialData.quantity !== null
             ? Number(financialData.quantity)
