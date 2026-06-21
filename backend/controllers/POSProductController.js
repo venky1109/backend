@@ -508,7 +508,7 @@ const findOrCreateCatalogProduct = async (productData, categoryRow) => {
       makeCatalogCode('PRD', productName),
       productName,
       textOrBlank(productData.teluguname) || productName,
-      textOrBlank(productData.hsncode || productData.hsn),
+      numericTextOrNull(productData.hsncode || productData.hsn),
       Number(productData.gst || categoryRow?.gst_rate || 0),
     ]
   );
