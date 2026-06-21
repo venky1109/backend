@@ -1168,6 +1168,13 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
       return res.status(400).json({ error: 'MK barcode is required' });
     }
 
+    const requestedProductName = textOrBlank(
+      productData.name ||
+      productData.productname ||
+      productData.englishname
+    );
+    const requestedTeluguName = textOrBlank(productData.teluguname) || requestedProductName;
+
     let product = productId ? await Product.findById(productId) : null;
 
     if (!product) {
@@ -1179,6 +1186,15 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
         catalogProductId: Number(productData.catalogProductId),
         catalogCategoryId: Number(productData.catalogCategoryId),
       });
+      if (
+        product &&
+        requestedProductName &&
+        !sameText(product.name, requestedProductName) &&
+        !sameText(product.productname, requestedProductName) &&
+        !sameText(product.englishname, requestedProductName)
+      ) {
+        product = null;
+      }
     }
 
     if (!product && productData.name && productData.category) {
@@ -1198,10 +1214,10 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
         catalogProductId: productData.catalogProductId ? Number(productData.catalogProductId) : undefined,
         catalogCategoryId: productData.catalogCategoryId ? Number(productData.catalogCategoryId) : undefined,
         mongoCategoryId: productData.mongoCategoryId || new mongoose.Types.ObjectId().toString(),
-        name: productData.name || productData.productname || productData.englishname,
-        productname: productData.productname || productData.name || productData.englishname,
-        englishname: productData.englishname || productData.name || '',
-        teluguname: productData.teluguname || '',
+        name: requestedProductName,
+        productname: productData.productname || requestedProductName,
+        englishname: productData.englishname || requestedProductName,
+        teluguname: requestedTeluguName,
         hsncode: productData.hsncode || productData.hsn || '',
         gst: Number(productData.gst || 0),
         category: productData.category || 'Migration',
@@ -1214,10 +1230,10 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
       product.catalogCategoryId = productData.catalogCategoryId
         ? Number(productData.catalogCategoryId)
         : product.catalogCategoryId;
-      product.name = productData.name || product.name;
-      product.productname = productData.productname || product.productname || product.name;
-      product.englishname = productData.englishname || product.englishname || product.name;
-      product.teluguname = productData.teluguname || product.teluguname;
+      product.name = requestedProductName || product.name;
+      product.productname = productData.productname || requestedProductName || product.productname || product.name;
+      product.englishname = productData.englishname || requestedProductName || product.englishname || product.name;
+      product.teluguname = requestedTeluguName || product.teluguname || product.name;
       product.hsncode = productData.hsncode || productData.hsn || product.hsncode;
       product.gst = productData.gst !== undefined && productData.gst !== null ? Number(productData.gst) : product.gst;
       product.category = productData.category || product.category;
