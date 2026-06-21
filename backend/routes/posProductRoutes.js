@@ -13,6 +13,7 @@ import {
   getBarcodeAssignerSyncData,
   getPOSProductByBarcode,
   getPOSProductByCatalogProductBarcodeId,
+  generateBarcodeAssignerMkBarcode,
 } from '../controllers/POSProductController.js';
 
 import { protectPOS, isAdminOrInventory, allowAllRoles } from '../middleware/posAuthMiddleware.js';
@@ -33,6 +34,7 @@ router.get('/barcode-assigner/brand-suggestions', isAdminOrInventory, getBarcode
 router.get('/barcode-assigner/sync-data', isAdminOrInventory, getBarcodeAssignerSyncData);
 router.get('/barcode-assigner/catalog-barcode/:catalogProductBarcodeId', isAdminOrInventory, getBarcodeAssignerCatalogBarcodeById);
 router.post('/barcode-assigner/mk-barcode/preview', isAdminOrInventory, previewBarcodeAssignerMkBarcode);
+router.post('/barcode-assigner/mk-barcode/generate', isAdminOrInventory, generateBarcodeAssignerMkBarcode);
 router.put('/update-financial', isAdminOrInventory, updatePOSProductFinancial);
 router.get(
   '/catalog-product-barcode/:catalogProductBarcodeId',

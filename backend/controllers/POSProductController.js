@@ -552,6 +552,59 @@ export const previewBarcodeAssignerMkBarcode = async (req, res) => {
   }
 };
 
+export const generateBarcodeAssignerMkBarcode = async (req, res) => {
+  try {
+    const {
+      productData = {},
+      detailData = {},
+      financialData = {},
+    } = req.body || {};
+
+    const cleanBarcode = Array.isArray(financialData.barcode)
+      ? financialData.barcode.filter(Boolean).map(String)
+      : financialData.barcode
+        ? [String(financialData.barcode)]
+        : [];
+
+    if (!textOrBlank(productData.name || productData.productname || productData.englishname)) {
+      return res.status(400).json({ error: 'Product name is required to generate MK barcode' });
+    }
+    if (!textOrBlank(productData.category)) {
+      return res.status(400).json({ error: 'Category is required to generate MK barcode' });
+    }
+    if (!textOrBlank(detailData.brand)) {
+      return res.status(400).json({ error: 'Brand is required to generate MK barcode' });
+    }
+    if (!textOrBlank(financialData.units) || !Number(financialData.quantity || 0)) {
+      return res.status(400).json({ error: 'Quantity and units are required to generate MK barcode' });
+    }
+
+    const catalogIds = await ensureCatalogBarcodeForAssignment({
+      productData,
+      detailData,
+      financialData,
+      cleanBarcode,
+    });
+
+    return res.json({
+      catalogProductBarcodeId: catalogIds.barcodeId,
+      productBarcodeId: catalogIds.barcodeId,
+      mkid: catalogIds.barcodeId,
+      expectedMkBarcode: catalogIds.mkBarcode,
+      currentMkBarcode: textOrBlank(financialData.mk_barcode),
+      mismatch: Boolean(textOrBlank(financialData.mk_barcode) && textOrBlank(financialData.mk_barcode) !== catalogIds.mkBarcode),
+      canGenerate: true,
+      catalogProductId: catalogIds.productId,
+      catalogCategoryId: catalogIds.categoryId,
+      catalogBrandId: catalogIds.brandId,
+      message: 'MKID and MK barcode generated from catalog.',
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to generate MK barcode', details: err.message });
+  }
+};
+
 const ensureCatalogBarcodeForAssignment = async ({
   productData,
   detailData,
@@ -1178,6 +1231,16 @@ export const getBarcodeAssignerSyncData = async (req, res) => {
     );
 
     const catalogItems = await enrichCatalogMatchesWithMongoFinancials(rows.map(mapCatalogAssignerRow));
+    const catalogBarcodeIds = new Set(
+      rows
+        .map((row) => Number(row.id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    );
+    const catalogMkBarcodes = new Set(
+      rows
+        .map((row) => textOrBlank(row.mk_barcode))
+        .filter(Boolean)
+    );
     const mongoProducts = await Product.find({})
       .select('catalogProductId catalogCategoryId name productname englishname category hsncode gst details')
       .limit(limit);
@@ -1189,19 +1252,36 @@ export const getBarcodeAssignerSyncData = async (req, res) => {
           ...match,
         })
       )
-    );
+    ).filter((item) => {
+      const linkedCatalogId = Number(item.catalogProductBarcodeId || item.productBarcodeId || item.mkid);
+      const linkedMkBarcode = textOrBlank(item.mk_barcode);
+      const hasCatalogLink =
+        (Number.isInteger(linkedCatalogId) && linkedCatalogId > 0) ||
+        Boolean(linkedMkBarcode);
+
+      if (!hasCatalogLink) return true;
+
+      return (
+        (Number.isInteger(linkedCatalogId) && catalogBarcodeIds.has(linkedCatalogId)) ||
+        (linkedMkBarcode && catalogMkBarcodes.has(linkedMkBarcode))
+      );
+    });
 
     const seen = new Set();
     const suggestions = [...catalogItems, ...mongoItems].filter((item) => {
-      const key = [
-        item.source,
-        item.catalogProductBarcodeId || item.productBarcodeId || item.financialId || '',
-        item.mk_barcode || '',
-        item.productName || '',
-        item.brand || '',
-        item.quantity || '',
-        item.units || '',
-      ].join('|').toLowerCase();
+      const catalogId = textOrBlank(item.catalogProductBarcodeId || item.productBarcodeId || item.mkid);
+      const mkBarcode = textOrBlank(item.mk_barcode);
+      const key = catalogId
+        ? `catalog:${catalogId}`
+        : mkBarcode
+          ? `mk:${mkBarcode}`
+          : [
+              item.financialId || '',
+              item.productName || '',
+              item.brand || '',
+              item.quantity || '',
+              item.units || '',
+            ].join('|').toLowerCase();
 
       if (seen.has(key)) return false;
       seen.add(key);
