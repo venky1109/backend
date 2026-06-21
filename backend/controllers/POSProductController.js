@@ -481,7 +481,14 @@ const ensureCatalogBarcodeForAssignment = async ({
   const product = await findOrCreateCatalogProduct(productData, category);
   const brand = await findOrCreateCatalogBrand(detailData.brand);
   const unit = await findOrCreateCatalogUnit(financialData.units);
-  const vendorBarcode = cleanBarcode.find((item) => item !== String(financialData.mk_barcode)) || cleanBarcode[0] || null;
+  const resolvedMkBarcode = textOrBlank(financialData.mk_barcode) || makeMkBarcode({
+    product_id: Number(product.id),
+    brand_id: Number(brand.id),
+    category_id: Number(category.id),
+    unit_id: Number(unit.id),
+    quantity: Number(financialData.quantity || 0),
+  });
+  const vendorBarcode = cleanBarcode.find((item) => item !== resolvedMkBarcode) || cleanBarcode[0] || null;
 
   const existing = await pgQuery(
     `
@@ -518,7 +525,7 @@ const ensureCatalogBarcodeForAssignment = async ({
       WHERE id = $1
       RETURNING *
       `,
-      [barcode.id, vendorBarcode, financialData.mk_barcode || null, detailData.image || null]
+      [barcode.id, vendorBarcode, resolvedMkBarcode || null, detailData.image || null]
     );
     barcode = updated.rows[0];
   } else {
@@ -537,7 +544,7 @@ const ensureCatalogBarcodeForAssignment = async ({
         Number(unit.id),
         Number(financialData.quantity || 0),
         vendorBarcode,
-        financialData.mk_barcode ? String(financialData.mk_barcode) : null,
+        resolvedMkBarcode || null,
         detailData.image || null,
       ]
     );
@@ -573,6 +580,7 @@ const ensureCatalogBarcodeForAssignment = async ({
     categoryId: category.id,
     brandId: brand.id,
     barcodeId: barcode.id,
+    mkBarcode: barcode.mk_barcode || resolvedMkBarcode,
   };
 };
 
@@ -1134,10 +1142,6 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
       financialData = {},
     } = req.body;
 
-    if (!financialData?.mk_barcode) {
-      return res.status(400).json({ error: 'MK barcode is required' });
-    }
-
     const cleanBarcode = Array.isArray(financialData.barcode)
       ? financialData.barcode.filter(Boolean).map(String)
       : financialData.barcode
@@ -1157,6 +1161,11 @@ export const upsertPOSProductFinancialFromAssigner = async (req, res) => {
       detailData.catalogBrandId = detailData.catalogBrandId || catalogIds.brandId;
       financialData.catalogProductBarcodeId = catalogIds.barcodeId;
       financialData.product_barcode_id = financialData.product_barcode_id || catalogIds.barcodeId;
+      financialData.mk_barcode = financialData.mk_barcode || catalogIds.mkBarcode;
+    }
+
+    if (!financialData?.mk_barcode) {
+      return res.status(400).json({ error: 'MK barcode is required' });
     }
 
     let product = productId ? await Product.findById(productId) : null;
