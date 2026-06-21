@@ -6,6 +6,8 @@ import {
   upsertPOSProductFinancialFromAssigner,
   lookupBarcodeAssignerProduct,
   getBarcodeAssignerNameSuggestions,
+  getBarcodeAssignerCategorySuggestions,
+  getBarcodeAssignerBrandSuggestions,
   getBarcodeAssignerCatalogBarcodeById,
   previewBarcodeAssignerMkBarcode,
   getBarcodeAssignerSyncData,
@@ -26,6 +28,8 @@ router.post('/add-financial', isAdminOrInventory, addFinancialToPOSProduct);
 router.post('/barcode-assigner/upsert', isAdminOrInventory, upsertPOSProductFinancialFromAssigner);
 router.get('/barcode-assigner/lookup', isAdminOrInventory, lookupBarcodeAssignerProduct);
 router.get('/barcode-assigner/name-suggestions', isAdminOrInventory, getBarcodeAssignerNameSuggestions);
+router.get('/barcode-assigner/category-suggestions', isAdminOrInventory, getBarcodeAssignerCategorySuggestions);
+router.get('/barcode-assigner/brand-suggestions', isAdminOrInventory, getBarcodeAssignerBrandSuggestions);
 router.get('/barcode-assigner/sync-data', isAdminOrInventory, getBarcodeAssignerSyncData);
 router.get('/barcode-assigner/catalog-barcode/:catalogProductBarcodeId', isAdminOrInventory, getBarcodeAssignerCatalogBarcodeById);
 router.post('/barcode-assigner/mk-barcode/preview', isAdminOrInventory, previewBarcodeAssignerMkBarcode);

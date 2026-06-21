@@ -327,6 +327,96 @@ const findCatalogProduct = async (productName) => {
   return existing.rows[0] || null;
 };
 
+export const getBarcodeAssignerCategorySuggestions = async (req, res) => {
+  try {
+    const q = textOrBlank(req.query.q);
+    if (q.length < 2) {
+      return res.json({ suggestions: [] });
+    }
+
+    const { rows } = await pgQuery(
+      `
+      SELECT
+        id,
+        category_code,
+        category_name_english,
+        category_name_telugu
+      FROM catalog.categories
+      WHERE lower(category_name_english) LIKE $1
+         OR lower(category_name_telugu) LIKE $1
+         OR lower(category_code) LIKE $1
+      ORDER BY
+        CASE
+          WHEN lower(category_name_english) = lower($2) THEN 0
+          WHEN lower(category_name_english) LIKE lower($2 || '%') THEN 1
+          ELSE 2
+        END,
+        category_name_english
+      LIMIT 25
+      `,
+      [`%${q.toLowerCase()}%`, q]
+    );
+
+    res.json({
+      suggestions: rows.map((row) => ({
+        id: row.id,
+        value: row.category_name_english || row.category_name_telugu || '',
+        label: row.category_name_english || row.category_name_telugu || '',
+        code: row.category_code || '',
+        teluguName: row.category_name_telugu || '',
+      })),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch category suggestions', details: err.message });
+  }
+};
+
+export const getBarcodeAssignerBrandSuggestions = async (req, res) => {
+  try {
+    const q = textOrBlank(req.query.q);
+    if (q.length < 2) {
+      return res.json({ suggestions: [] });
+    }
+
+    const { rows } = await pgQuery(
+      `
+      SELECT
+        id,
+        brand_code,
+        brand_name_english,
+        brand_name_telugu
+      FROM catalog.brands
+      WHERE lower(brand_name_english) LIKE $1
+         OR lower(brand_name_telugu) LIKE $1
+         OR lower(brand_code) LIKE $1
+      ORDER BY
+        CASE
+          WHEN lower(brand_name_english) = lower($2) THEN 0
+          WHEN lower(brand_name_english) LIKE lower($2 || '%') THEN 1
+          ELSE 2
+        END,
+        brand_name_english
+      LIMIT 25
+      `,
+      [`%${q.toLowerCase()}%`, q]
+    );
+
+    res.json({
+      suggestions: rows.map((row) => ({
+        id: row.id,
+        value: row.brand_name_english || row.brand_name_telugu || '',
+        label: row.brand_name_english || row.brand_name_telugu || '',
+        code: row.brand_code || '',
+        teluguName: row.brand_name_telugu || '',
+      })),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch brand suggestions', details: err.message });
+  }
+};
+
 const findOrCreateCatalogProduct = async (productData, categoryRow) => {
   const name = textOrBlank(productData.name || productData.productname || productData.englishname);
   const productName = name || 'Migration Product';
