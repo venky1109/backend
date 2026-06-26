@@ -75,7 +75,7 @@ export const initiatePaymentAtDelivery = async (req, res) => {
 //   order_id: req.body.order_id,
 // });
 
-    const { amount, customerId ,order_id } = req.body;
+    const { amount, customerId, order_id, returnTarget, target } = req.body;
 
     if (!amount || !customerId ) {
         return res.status(400).json({
@@ -110,7 +110,11 @@ export const initiatePaymentAtDelivery = async (req, res) => {
       });
     }
  // Generate return URL
-         const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse`;
+         const targetQuery = [returnTarget, target]
+           .some((value) => String(value || '').toLowerCase() === 'android')
+           ? '?target=android'
+           : '';
+         const returnUrl = `${req.protocol}://${req.get('host')}/api/payments/handleJuspayResponse${targetQuery}`;
 
         // Generate return URL
        

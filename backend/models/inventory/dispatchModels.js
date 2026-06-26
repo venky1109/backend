@@ -107,10 +107,10 @@ export const DispatchOrder = {
       LEFT JOIN dispatch.dispatch_order_items i ON i.dispatch_order_id = d.id
       LEFT JOIN inventory.inventory_products ip ON ip.id = i.inventory_product_id
       LEFT JOIN catalog.product_barcodes pb ON pb.id = i.product_barcode_id
-      LEFT JOIN catalog.products p ON p.id = i.product_id
-      LEFT JOIN catalog.brands b ON b.id = i.brand_id
-      LEFT JOIN catalog.categories c ON c.id = i.category_id
-      LEFT JOIN catalog.units u ON u.id = i.unit_id
+      LEFT JOIN catalog.products p ON p.id = COALESCE(pb.product_id, i.product_id)
+      LEFT JOIN catalog.brands b ON b.id = COALESCE(pb.brand_id, i.brand_id)
+      LEFT JOIN catalog.categories c ON c.id = COALESCE(pb.category_id, i.category_id)
+      LEFT JOIN catalog.units u ON u.id = COALESCE(pb.unit_id, i.unit_id)
       GROUP BY d.id, tp.transit_status, w.id, w.warehouse_code, w.warehouse_name
       ORDER BY d.id DESC
       LIMIT $1 OFFSET $2
@@ -180,10 +180,10 @@ export const DispatchOrder = {
       LEFT JOIN dispatch.dispatch_order_items i ON i.dispatch_order_id = d.id
       LEFT JOIN inventory.inventory_products ip ON ip.id = i.inventory_product_id
       LEFT JOIN catalog.product_barcodes pb ON pb.id = i.product_barcode_id
-      LEFT JOIN catalog.products p ON p.id = i.product_id
-      LEFT JOIN catalog.brands b ON b.id = i.brand_id
-      LEFT JOIN catalog.categories c ON c.id = i.category_id
-      LEFT JOIN catalog.units u ON u.id = i.unit_id
+      LEFT JOIN catalog.products p ON p.id = COALESCE(pb.product_id, i.product_id)
+      LEFT JOIN catalog.brands b ON b.id = COALESCE(pb.brand_id, i.brand_id)
+      LEFT JOIN catalog.categories c ON c.id = COALESCE(pb.category_id, i.category_id)
+      LEFT JOIN catalog.units u ON u.id = COALESCE(pb.unit_id, i.unit_id)
       WHERE d.id = $1
       GROUP BY d.id, tp.transit_status, w.id, w.warehouse_code, w.warehouse_name
       `,
