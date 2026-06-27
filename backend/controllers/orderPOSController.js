@@ -267,6 +267,7 @@ const buildPOSSettlementFilter = (loggedInUser, posUserName) => {
   const location = loggedInUser?.location || null;
   const filter = {
     source: 'CASHIER',
+    isPaid: true,
     isPosSettled: { $ne: true },
   };
 
