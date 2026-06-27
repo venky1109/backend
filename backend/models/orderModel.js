@@ -185,6 +185,20 @@ const orderSchema = mongoose.Schema(
       trim: true,
       default: null,
     },
+    isPosSettled: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    posSettledAt: {
+      type: Date,
+      default: null,
+    },
+    posSettledBy: {
+      type: String,
+      trim: true,
+      default: null,
+    },
   },
   {
     timestamps: true,

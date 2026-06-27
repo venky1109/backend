@@ -22,6 +22,8 @@ import {
   updateOrdersToPaidWithTimers,
   getFilteredPOSOrders,
   getPOSOrderDetails,
+  getPOSSettlementSummary,
+  settlePOSOrders,
   getTopProductsReportPOS,
   updatePOSOrderItems,
   deletePOSOrderItem,
@@ -41,6 +43,9 @@ router
   .route('/pos')
   .get(protectPOS, cashierOrAdmin, getOrdersPOS)
   .post(posProtect, cashierOrAdmin, addOrderItemsPOS);
+
+router.get('/pos/settlement/summary', posProtect, cashierOrAdmin, getPOSSettlementSummary);
+router.post('/pos/settlement/settle', posProtect, cashierOrAdmin, settlePOSOrders);
 
 router
   .route('/pos/:id/items')

@@ -261,6 +261,32 @@ const buildPOSAccessFilter = (loggedInUser) => {
   return base;
 };
 
+const buildPOSSettlementFilter = (loggedInUser, posUserName) => {
+  const role = String(loggedInUser?.role || '').trim().toUpperCase();
+  const username = loggedInUser?.username || null;
+  const location = loggedInUser?.location || null;
+  const filter = {
+    source: 'CASHIER',
+    isPosSettled: { $ne: true },
+  };
+
+  if (role === 'CASHIER') {
+    filter.posUserName = username;
+    filter.posLocation = location;
+    return filter;
+  }
+
+  if (location) {
+    filter.posLocation = location;
+  }
+
+  if (posUserName && ['ADMIN', 'DIRECTOR', 'MANAGER', 'SUPERVISOR'].includes(role)) {
+    filter.posUserName = String(posUserName).trim();
+  }
+
+  return filter;
+};
+
 // ONLINE orders helper, kept separately if needed elsewhere
 const buildOnlineAccessFilter = (loggedInUser) => {
   const base = { source: { $in: ['ONLINE', 'ANDROID'] } };
@@ -541,6 +567,78 @@ const getFilteredPOSOrders = asyncHandler(async (req, res) => {
   }));
 
   res.json(shaped);
+});
+
+const getPOSSettlementSummary = asyncHandler(async (req, res) => {
+  const filter = buildPOSSettlementFilter(req.user, req.query.posUserName);
+
+  const rows = await Order.aggregate([
+    { $match: filter },
+    {
+      $group: {
+        _id: {
+          posUserName: { $ifNull: ['$posUserName', 'UNKNOWN'] },
+          posLocation: { $ifNull: ['$posLocation', 'UNKNOWN'] },
+        },
+        amount: { $sum: { $ifNull: ['$totalPrice', 0] } },
+        count: { $sum: 1 },
+        lastOrderAt: { $max: '$createdAt' },
+      },
+    },
+    { $sort: { '_id.posUserName': 1 } },
+  ]);
+
+  const cashiers = rows.map((row) => ({
+    posUserName: row._id.posUserName,
+    posLocation: row._id.posLocation,
+    amount: Number((row.amount || 0).toFixed(2)),
+    count: row.count || 0,
+    lastOrderAt: row.lastOrderAt,
+  }));
+
+  res.json({
+    amount: Number(cashiers.reduce((sum, row) => sum + row.amount, 0).toFixed(2)),
+    count: cashiers.reduce((sum, row) => sum + row.count, 0),
+    location: req.user?.location || null,
+    cashiers,
+  });
+});
+
+const settlePOSOrders = asyncHandler(async (req, res) => {
+  const filter = buildPOSSettlementFilter(req.user, req.body?.posUserName);
+  const orders = await Order.find(filter).select('_id totalPrice');
+
+  if (orders.length === 0) {
+    return res.json({
+      message: 'No settlement amount pending.',
+      amount: 0,
+      count: 0,
+    });
+  }
+
+  const amount = Number(
+    orders.reduce((sum, order) => sum + Number(order.totalPrice || 0), 0).toFixed(2)
+  );
+  const settledAt = new Date();
+  const settledBy = req.user?.username || req.user?._id?.toString() || 'POS';
+
+  await Order.updateMany(
+    { _id: { $in: orders.map((order) => order._id) } },
+    {
+      $set: {
+        isPosSettled: true,
+        posSettledAt: settledAt,
+        posSettledBy: settledBy,
+      },
+    }
+  );
+
+  res.json({
+    message: 'Settlement completed.',
+    amount,
+    count: orders.length,
+    settledAt,
+  });
 });
 
 // ------------------------------------
@@ -1156,6 +1254,8 @@ export {
   updateOrdersToPaidWithTimers,
   getFilteredPOSOrders,
   getPOSOrderDetails,
+  getPOSSettlementSummary,
+  settlePOSOrders,
   getTopProductsReportPOS,
   getOnlineOrders,
   getOnlineOrderDetails,
